@@ -20,6 +20,8 @@ pub enum Command {
         kernel: PathBuf,
         #[arg(long)]
         rootfs: PathBuf,
+        #[arg(long, default_value = "firecracker")]
+        firecracker_bin: PathBuf,
         #[arg(long, default_value = "tap0")]
         tap: String,
         #[arg(long, default_value = "console=ttyS0 reboot=k panic=1 pci=off")]
@@ -28,6 +30,8 @@ pub enum Command {
         vcpu: u8,
         #[arg(long, default_value_t = 256)]
         memory_mib: u32,
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Deploy an immutable app image.
     Deploy { app: String },
@@ -81,13 +85,14 @@ mod tests {
         .expect("parse run command");
 
         assert!(
-            matches!(cli.command, Command::Run { app, kernel, rootfs, tap, vcpu, memory_mib, .. }
+            matches!(cli.command, Command::Run { app, kernel, rootfs, tap, vcpu, memory_mib, dry_run, .. }
                 if app == "web"
                     && kernel == Path::new("/kernels/vmlinux")
                     && rootfs == Path::new("/images/web.ext4")
                     && tap == "tap-web"
                     && vcpu == 2
-                    && memory_mib == 512)
+                    && memory_mib == 512
+                    && !dry_run)
         );
     }
 

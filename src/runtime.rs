@@ -41,6 +41,17 @@ impl RuntimeLayout {
         self.app_dir.join(STATE_FILE)
     }
 
+    pub fn remove(&self) -> Result<()> {
+        match fs::remove_dir_all(&self.app_dir) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error).context(format!(
+                "failed to remove runtime directory {}",
+                self.app_dir.display()
+            )),
+        }
+    }
+
     pub fn create_dirs(&self) -> Result<()> {
         fs::create_dir_all(self.log_dir()).context(format!(
             "failed to create runtime directory {}",
@@ -84,6 +95,11 @@ impl RuntimeState {
 
     pub fn with_status(mut self, status: RuntimeStatus) -> Self {
         self.status = status;
+        self
+    }
+
+    pub fn with_pid(mut self, pid: u32) -> Self {
+        self.pid = Some(pid);
         self
     }
 
@@ -149,6 +165,19 @@ mod tests {
         assert!(!layout.state_file_path().exists());
 
         fs::remove_dir_all(root).expect("remove temp project");
+    }
+
+    #[test]
+    fn remove_deletes_runtime_directory_and_allows_missing_directory() {
+        let root = temp_project_dir("runtime-remove");
+        let layout = RuntimeLayout::from_runtime_dir(&root.join(".v/runtime"), "web");
+
+        layout.create_dirs().expect("create runtime directories");
+        assert!(layout.app_dir().is_dir());
+
+        layout.remove().expect("remove runtime directory");
+        layout.remove().expect("remove missing runtime directory");
+        assert!(!layout.app_dir().exists());
     }
 
     #[test]

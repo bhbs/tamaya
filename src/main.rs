@@ -7,6 +7,7 @@ mod registry;
 mod runtime;
 
 use anyhow::Result;
+use app::RunOptions;
 use clap::Parser;
 use cli::{Cli, Command};
 
@@ -19,11 +20,23 @@ fn main() -> Result<()> {
             app,
             kernel,
             rootfs,
+            firecracker_bin,
             tap,
             boot_args,
             vcpu,
             memory_mib,
-        } => app::run(&app, kernel, rootfs, &tap, &boot_args, vcpu, memory_mib),
+            dry_run,
+        } => app::run(RunOptions {
+            app,
+            kernel,
+            rootfs,
+            firecracker_bin,
+            tap,
+            boot_args,
+            vcpu,
+            memory_mib,
+            dry_run,
+        }),
         Command::Ps => app::ps(),
         Command::Deploy { app } => app::deploy(&app),
         Command::Rollback { app } => app::rollback(&app),

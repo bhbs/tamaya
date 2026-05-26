@@ -1,12 +1,19 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use std::fs::{self, File};
+use std::io::{Read, Write};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 const MAX_HTTP_BODY_BYTES: usize = 16 * 1024;
 const MAX_PATH_BYTES: usize = 4096;
 const MAX_ID_BYTES: usize = 64;
 const MAX_BOOT_ARGS_BYTES: usize = 4096;
 const API_HOST: &str = "localhost";
+const FIRECRACKER_SOCKET_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MachineConfig {
@@ -259,6 +266,120 @@ impl FirecrackerClient {
             self.put_network_interface(&plan.network_interface)?,
         ])
     }
+
+    pub fn start_instance(&self) -> Result<UnixHttpRequest> {
+        UnixHttpRequest::new(
+            "PUT",
+            "/actions",
+            r#"{"action_type":"InstanceStart"}"#.to_string(),
+        )
+    }
+
+    pub fn send(&self, request: &UnixHttpRequest) -> Result<()> {
+        let mut stream = UnixStream::connect(&self.api_socket_path).context(format!(
+            "failed to connect to Firecracker API socket {}",
+            self.api_socket_path.display()
+        ))?;
+        stream
+            .set_read_timeout(Some(FIRECRACKER_SOCKET_TIMEOUT))
+            .context("failed to set Firecracker API read timeout")?;
+        stream
+            .write_all(&request.to_http_payload())
+            .context(format!(
+                "failed to send {} {}",
+                request.method, request.path
+            ))?;
+        stream
+            .shutdown(std::net::Shutdown::Write)
+            .context("failed to finish Firecracker API request")?;
+
+        let response = read_http_response(&mut stream)
+            .context(format!("failed to read response for {}", request.path))?;
+        ensure_success_response(&response, request)
+    }
+
+    pub fn boot(&self, plan: &BootPlan) -> Result<()> {
+        for request in self.build_boot_requests(plan)? {
+            self.send(&request)?;
+        }
+
+        self.send(&self.start_instance()?)
+    }
+}
+
+#[derive(Debug)]
+pub struct FirecrackerProcess {
+    child: Child,
+}
+
+impl FirecrackerProcess {
+    pub fn start(
+        binary: &Path,
+        api_socket_path: &Path,
+        log_dir: &Path,
+    ) -> Result<FirecrackerProcess> {
+        if let Some(parent) = api_socket_path.parent() {
+            fs::create_dir_all(parent).context(format!(
+                "failed to create Firecracker runtime directory {}",
+                parent.display()
+            ))?;
+        }
+        fs::create_dir_all(log_dir).context(format!(
+            "failed to create log directory {}",
+            log_dir.display()
+        ))?;
+
+        remove_stale_socket(api_socket_path)?;
+
+        let stdout = File::create(log_dir.join("firecracker.stdout.log"))
+            .context("failed to create Firecracker stdout log")?;
+        let stderr = File::create(log_dir.join("firecracker.stderr.log"))
+            .context("failed to create Firecracker stderr log")?;
+        let child = Command::new(binary)
+            .arg("--api-sock")
+            .arg(api_socket_path)
+            .stdin(Stdio::null())
+            .stdout(stdout)
+            .stderr(stderr)
+            .spawn()
+            .context(format!(
+                "failed to start Firecracker binary {}",
+                binary.display()
+            ))?;
+
+        let mut process = FirecrackerProcess { child };
+        process.wait_for_api_socket(api_socket_path)?;
+        Ok(process)
+    }
+
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    fn wait_for_api_socket(&mut self, api_socket_path: &Path) -> Result<()> {
+        let deadline = Instant::now() + FIRECRACKER_SOCKET_TIMEOUT;
+
+        while Instant::now() < deadline {
+            if api_socket_path.exists() {
+                return Ok(());
+            }
+
+            if let Some(status) = self
+                .child
+                .try_wait()
+                .context("failed to poll Firecracker process")?
+            {
+                bail!("Firecracker exited before creating API socket: {status}");
+            }
+
+            thread::sleep(Duration::from_millis(25));
+        }
+
+        bail!(
+            "timed out waiting for Firecracker API socket {}",
+            api_socket_path.display()
+        )
+    }
 }
 
 fn validate_path(name: &str, path: &Path) -> Result<()> {
@@ -269,6 +390,94 @@ fn validate_path(name: &str, path: &Path) -> Result<()> {
     }
 
     validate_bounded(name, &path, MAX_PATH_BYTES)
+}
+
+fn remove_stale_socket(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).context(format!(
+            "failed to remove stale Firecracker API socket {}",
+            path.display()
+        )),
+    }
+}
+
+fn ensure_success_response(response: &str, request: &UnixHttpRequest) -> Result<()> {
+    let status_line = response.lines().next().unwrap_or_default();
+    let success = status_line.starts_with("HTTP/1.1 2") || status_line.starts_with("HTTP/1.0 2");
+
+    if success {
+        return Ok(());
+    }
+
+    bail!(
+        "Firecracker API request failed: {} {}: {}",
+        request.method,
+        request.path,
+        if response.is_empty() {
+            "<empty response>"
+        } else {
+            response
+        }
+    )
+}
+
+fn read_http_response(stream: &mut UnixStream) -> Result<String> {
+    let mut response = Vec::new();
+    let mut buffer = [0; 4096];
+
+    loop {
+        match stream.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => {
+                response.extend_from_slice(&buffer[..read]);
+                if response_has_complete_body(&response) {
+                    break;
+                }
+            }
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    || error.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                if response.is_empty() {
+                    return Err(error).context("timed out before Firecracker API response");
+                }
+                break;
+            }
+            Err(error) => return Err(error).context("failed to read Firecracker API response"),
+        }
+    }
+
+    String::from_utf8(response).context("Firecracker API response is not utf-8")
+}
+
+fn response_has_complete_body(response: &[u8]) -> bool {
+    let Some(header_end) = find_header_end(response) else {
+        return false;
+    };
+    let Ok(headers) = std::str::from_utf8(&response[..header_end]) else {
+        return false;
+    };
+
+    let Some(content_length) = headers.lines().find_map(parse_content_length) else {
+        return false;
+    };
+
+    response.len() >= header_end + 4 + content_length
+}
+
+fn find_header_end(response: &[u8]) -> Option<usize> {
+    response.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+fn parse_content_length(line: &str) -> Option<usize> {
+    let (name, value) = line.split_once(':')?;
+    if !name.eq_ignore_ascii_case("content-length") {
+        return None;
+    }
+
+    value.trim().parse().ok()
 }
 
 fn validate_bounded(name: &str, value: &str, max_bytes: usize) -> Result<()> {
@@ -365,6 +574,38 @@ mod tests {
                 "/network-interfaces/eth0"
             ]
         );
+    }
+
+    #[test]
+    fn builds_start_instance_request() {
+        let client = FirecrackerClient::new("/tmp/firecracker.socket").unwrap();
+        let request = client.start_instance().unwrap();
+
+        assert_eq!(request.method, "PUT");
+        assert_eq!(request.path, "/actions");
+        assert_eq!(request.body, r#"{"action_type":"InstanceStart"}"#);
+    }
+
+    #[test]
+    fn detects_complete_http_response_body() {
+        assert!(response_has_complete_body(
+            b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n"
+        ));
+        assert!(response_has_complete_body(
+            b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n{}"
+        ));
+        assert!(!response_has_complete_body(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{"
+        ));
+        assert!(!response_has_complete_body(b"HTTP/1.1 200 OK\r\n"));
+    }
+
+    #[test]
+    fn parses_content_length_header() {
+        assert_eq!(parse_content_length("Content-Length: 12"), Some(12));
+        assert_eq!(parse_content_length("content-length: 0"), Some(0));
+        assert_eq!(parse_content_length("Content-Type: application/json"), None);
+        assert_eq!(parse_content_length("Content-Length: nope"), None);
     }
 
     #[test]

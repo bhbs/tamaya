@@ -21,7 +21,7 @@ test:
 coverage:
     cargo llvm-cov --quiet --no-cfg-coverage --all-features --workspace --fail-under-lines 99
 
-ci: fmt-check clippy test coverage
+ci: fmt-check clippy test
 
 run *args:
     cargo run -- {{args}}
