@@ -44,6 +44,18 @@ pub enum Command {
         kernel: Option<PathBuf>,
         #[arg(long)]
         rootfs: Option<PathBuf>,
+        #[arg(long, default_value = "tap0")]
+        tap: String,
+        #[arg(long)]
+        skip_runtime: bool,
+        #[arg(long)]
+        skip_capabilities: bool,
+        #[arg(long)]
+        skip_kernel: bool,
+        #[arg(long)]
+        skip_rootfs: bool,
+        #[arg(long)]
+        skip_tap: bool,
     },
     /// Deploy an immutable app image.
     Deploy { app: String },
@@ -116,13 +128,28 @@ mod tests {
         let cli = Cli::try_parse_from(["v", "check", "web", "--worker", "vps-prod"])
             .expect("parse check command");
 
-        assert!(
-            matches!(cli.command, Command::Check { app, worker, kernel, rootfs }
+        assert!(matches!(cli.command, Command::Check {
+                app,
+                worker,
+                kernel,
+                rootfs,
+                tap,
+                skip_runtime,
+                skip_capabilities,
+                skip_kernel,
+                skip_rootfs,
+                skip_tap,
+            }
                 if app == "web"
                     && worker.as_deref() == Some("vps-prod")
                     && kernel.is_none()
-                    && rootfs.is_none())
-        );
+                    && rootfs.is_none()
+                    && tap == "tap0"
+                    && !skip_runtime
+                    && !skip_capabilities
+                    && !skip_kernel
+                    && !skip_rootfs
+                    && !skip_tap));
     }
 
     #[test]
@@ -137,16 +164,38 @@ mod tests {
             "/kernels/vmlinux",
             "--rootfs",
             "$XDG_DATA_HOME/v/images/web.ext4",
+            "--tap",
+            "tap-web",
+            "--skip-runtime",
+            "--skip-capabilities",
+            "--skip-kernel",
+            "--skip-rootfs",
+            "--skip-tap",
         ])
         .expect("parse check command");
 
-        assert!(
-            matches!(cli.command, Command::Check { app, worker, kernel, rootfs }
+        assert!(matches!(cli.command, Command::Check {
+                app,
+                worker,
+                kernel,
+                rootfs,
+                tap,
+                skip_runtime,
+                skip_capabilities,
+                skip_kernel,
+                skip_rootfs,
+                skip_tap,
+            }
                 if app == "web"
                     && worker.as_deref() == Some("vps-prod")
                     && kernel.as_deref() == Some(Path::new("/kernels/vmlinux"))
-                    && rootfs.as_deref() == Some(Path::new("$XDG_DATA_HOME/v/images/web.ext4")))
-        );
+                    && rootfs.as_deref() == Some(Path::new("$XDG_DATA_HOME/v/images/web.ext4"))
+                    && tap == "tap-web"
+                    && skip_runtime
+                    && skip_capabilities
+                    && skip_kernel
+                    && skip_rootfs
+                    && skip_tap));
     }
 
     #[test]

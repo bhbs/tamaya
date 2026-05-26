@@ -30,13 +30,13 @@
 ## Phase 2: Minimal Firecracker Boot on Linux Worker
 
 - [x] Read kernel and rootfs paths from CLI.
-- [ ] Start Firecracker process over SSH on the worker.
-- [ ] Create Firecracker API socket path on the worker.
+- [x] Start Firecracker process over SSH on the worker.
+- [x] Create Firecracker API socket path on the worker.
 - [x] Build read-only rootfs `virtio-blk` API request.
 - [x] Build TAP networking API request.
-- [ ] Send Firecracker API requests against the worker-side socket.
-- [ ] Boot a microVM on the worker.
-- [ ] Stop and clean up a worker microVM.
+- [x] Send Firecracker API requests against the worker-side socket.
+- [x] Boot a microVM on the worker.
+- [x] Stop and clean up a worker microVM.
 
 ## Phase 3: VM Lifecycle
 

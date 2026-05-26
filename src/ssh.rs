@@ -1,8 +1,11 @@
 use crate::config::WorkerConfig;
+use crate::firecracker::UnixHttpRequest;
 use anyhow::{Context, Result, bail};
 use std::ffi::OsString;
+use std::fs::File;
+use std::io;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SshRunner {
@@ -93,6 +96,136 @@ impl SshRunner {
 
         Ok(resolved.to_string())
     }
+
+    pub fn upload_boot_file(&self, app: &str, kind: &str, local_path: &Path) -> Result<String> {
+        validate_remote_name("app", app)?;
+        validate_remote_name("kind", kind)?;
+        let filename = local_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .context("local boot file must have a UTF-8 file name")?;
+        validate_remote_name("filename", filename)?;
+
+        let mut local_file = File::open(local_path).context(format!(
+            "failed to open local boot file {}",
+            local_path.display()
+        ))?;
+        let mut child = self
+            .shell_command(&upload_boot_file_script(app, kind, filename))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("failed to run ssh upload command")?;
+
+        {
+            let mut stdin = child.stdin.take().context("failed to open ssh stdin")?;
+            io::copy(&mut local_file, &mut stdin).context(format!(
+                "failed to stream local boot file {}",
+                local_path.display()
+            ))?;
+        }
+
+        let output = child
+            .wait_with_output()
+            .context("failed to wait for ssh upload command")?;
+        if !output.status.success() {
+            bail!(
+                "ssh upload failed with status {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+
+        let stdout = String::from_utf8(output.stdout).context("ssh stdout is not utf-8")?;
+        let remote_path = stdout
+            .lines()
+            .next()
+            .context("remote boot file path was not reported")?;
+
+        Ok(remote_path.to_string())
+    }
+
+    pub fn require_tap_interface(&self, tap: &str) -> Result<String> {
+        validate_remote_name("tap", tap)?;
+        let output = self
+            .run_shell(&require_tap_interface_script(tap))
+            .context(format!("failed to validate remote TAP interface {tap}"))?;
+        let stdout = String::from_utf8(output.stdout).context("ssh stdout is not utf-8")?;
+        let resolved = stdout
+            .lines()
+            .next()
+            .context("remote TAP interface was not reported")?;
+
+        Ok(resolved.to_string())
+    }
+
+    pub fn ensure_tap_interface(&self, tap: &str) -> Result<String> {
+        validate_remote_name("tap", tap)?;
+        let output = self
+            .run_shell(&ensure_tap_interface_script(tap))
+            .context(format!(
+                "failed to create or enable remote TAP interface {tap}"
+            ))?;
+        let stdout = String::from_utf8(output.stdout).context("ssh stdout is not utf-8")?;
+        let resolved = stdout
+            .lines()
+            .next()
+            .context("remote TAP interface was not reported")?;
+
+        Ok(resolved.to_string())
+    }
+
+    pub fn start_firecracker(
+        &self,
+        firecracker_bin: &str,
+        api_socket_path: &Path,
+        log_dir: &Path,
+    ) -> Result<u32> {
+        let api_socket_path = path_to_remote_string(api_socket_path)?;
+        let log_dir = path_to_remote_string(log_dir)?;
+        let output = self
+            .run_shell(&start_firecracker_script(
+                firecracker_bin,
+                &api_socket_path,
+                &log_dir,
+            ))
+            .context("failed to start remote Firecracker")?;
+        let stdout = String::from_utf8(output.stdout).context("ssh stdout is not utf-8")?;
+        let pid = stdout
+            .lines()
+            .next()
+            .context("remote Firecracker PID was not reported")?
+            .parse()
+            .context("remote Firecracker PID is not a valid integer")?;
+
+        Ok(pid)
+    }
+
+    pub fn send_firecracker_api_requests(
+        &self,
+        api_socket_path: &Path,
+        requests: &[UnixHttpRequest],
+    ) -> Result<()> {
+        let api_socket_path = path_to_remote_string(api_socket_path)?;
+        for request in requests {
+            self.run_shell(&firecracker_api_request_script(&api_socket_path, request))
+                .context(format!(
+                    "failed to send Firecracker API request {} {}",
+                    request.method, request.path
+                ))?;
+        }
+
+        Ok(())
+    }
+
+    pub fn stop_firecracker(&self, pid: u32, remote_runtime_dir: &Path) -> Result<()> {
+        let remote_runtime_dir = path_to_remote_string(remote_runtime_dir)?;
+        self.run_shell(&stop_firecracker_script(pid, &remote_runtime_dir))
+            .context("failed to stop remote Firecracker")?;
+
+        Ok(())
+    }
 }
 
 pub fn remote_runtime_dir_display(app: &str) -> String {
@@ -138,6 +271,7 @@ fn worker_capability_script(worker: &WorkerConfig) -> String {
 if [ -n "$(id -u)" ]; then :; fi
 command -v sh >/dev/null
 command -v ip >/dev/null
+command -v curl >/dev/null
 if [ -x {firecracker_bin} ]; then
   :
 else
@@ -145,6 +279,92 @@ else
 fi
 "#,
         firecracker_bin = shell_quote(firecracker_bin)
+    )
+}
+
+fn start_firecracker_script(firecracker_bin: &str, api_socket_path: &str, log_dir: &str) -> String {
+    format!(
+        r#"set -eu
+firecracker_bin={firecracker_bin}
+api_socket={api_socket_path}
+log_dir={log_dir}
+runtime_dir="$(dirname "$api_socket")"
+mkdir -p "$runtime_dir" "$log_dir"
+rm -f "$api_socket"
+nohup "$firecracker_bin" --api-sock "$api_socket" > "$log_dir/firecracker.stdout.log" 2> "$log_dir/firecracker.stderr.log" < /dev/null &
+pid=$!
+i=0
+while [ "$i" -lt 200 ]; do
+  if [ -S "$api_socket" ]; then
+    printf '%s\n' "$pid"
+    exit 0
+  fi
+  if ! kill -0 "$pid" 2>/dev/null; then
+    echo "Firecracker exited before creating API socket" >&2
+    exit 1
+  fi
+  i=$((i + 1))
+  sleep 0.025
+done
+kill "$pid" 2>/dev/null || true
+echo "timed out waiting for Firecracker API socket: $api_socket" >&2
+exit 1
+"#,
+        firecracker_bin = shell_quote(firecracker_bin),
+        api_socket_path = shell_quote(api_socket_path),
+        log_dir = shell_quote(log_dir)
+    )
+}
+
+fn firecracker_api_request_script(api_socket_path: &str, request: &UnixHttpRequest) -> String {
+    format!(
+        r#"set -eu
+api_socket={api_socket_path}
+response="$(curl -sS -i --unix-socket "$api_socket" \
+  -X {method} \
+  -H 'Accept: application/json' \
+  -H 'Content-Type: application/json' \
+  --data {body} \
+  {url})"
+status="$(printf '%s\n' "$response" | sed -n '1s/^HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*/\1/p')"
+case "$status" in
+  2??) exit 0 ;;
+  *)
+    printf '%s\n' "$response" >&2
+    exit 1
+    ;;
+esac
+"#,
+        api_socket_path = shell_quote(api_socket_path),
+        method = shell_quote(&request.method),
+        body = shell_quote(&request.body),
+        url = shell_quote(&format!("http://localhost{}", request.path))
+    )
+}
+
+fn stop_firecracker_script(pid: u32, remote_runtime_dir: &str) -> String {
+    format!(
+        r#"set -eu
+pid={pid}
+runtime_dir={remote_runtime_dir}
+if kill -0 "$pid" 2>/dev/null; then
+  kill -TERM "$pid" 2>/dev/null || true
+fi
+i=0
+while [ "$i" -lt 100 ]; do
+  if ! kill -0 "$pid" 2>/dev/null; then
+    break
+  fi
+  i=$((i + 1))
+  sleep 0.025
+done
+if kill -0 "$pid" 2>/dev/null; then
+  kill -KILL "$pid" 2>/dev/null || true
+fi
+rm -rf "$runtime_dir"
+"#,
+        pid = pid,
+        remote_runtime_dir = shell_quote(remote_runtime_dir)
     )
 }
 
@@ -186,6 +406,51 @@ printf '%s\n' "$resolved"
 "#,
         name = shell_quote(name),
         path = shell_quote(path)
+    )
+}
+
+fn upload_boot_file_script(app: &str, kind: &str, filename: &str) -> String {
+    format!(
+        r#"set -eu
+xdg_data_home="${{XDG_DATA_HOME:-$HOME/.local/share}}"
+data_root="$xdg_data_home/v"
+image_dir="$data_root/images"
+mkdir -p "$image_dir"
+destination="$image_dir/{app}-{kind}-{filename}"
+tmp="$destination.tmp.$$"
+cat > "$tmp"
+mv "$tmp" "$destination"
+printf '%s\n' "$destination"
+"#,
+        app = shell_escape_for_double_quotes(app),
+        kind = shell_escape_for_double_quotes(kind),
+        filename = shell_escape_for_double_quotes(filename)
+    )
+}
+
+fn require_tap_interface_script(tap: &str) -> String {
+    format!(
+        r#"set -eu
+tap={tap}
+ip link show dev "$tap" >/dev/null
+ip link show dev "$tap" | grep -q '<[^>]*UP'
+printf '%s\n' "$tap"
+"#,
+        tap = shell_quote(tap)
+    )
+}
+
+fn ensure_tap_interface_script(tap: &str) -> String {
+    format!(
+        r#"set -eu
+tap={tap}
+if ! ip link show dev "$tap" >/dev/null 2>&1; then
+  ip tuntap add dev "$tap" mode tap
+fi
+ip link set "$tap" up
+printf '%s\n' "$tap"
+"#,
+        tap = shell_quote(tap)
     )
 }
 
@@ -287,6 +552,7 @@ mod tests {
         assert!(script.contains(r#"[ "$(uname -s)" = "Linux" ]"#));
         assert!(script.contains("[ -e /dev/kvm ]"));
         assert!(script.contains("command -v ip >/dev/null"));
+        assert!(script.contains("command -v curl >/dev/null"));
         assert!(script.contains("[ -x '/usr/local/bin/firecracker' ]"));
     }
 
@@ -308,6 +574,37 @@ mod tests {
     }
 
     #[test]
+    fn builds_boot_file_upload_script() {
+        let script = upload_boot_file_script("web", "rootfs", "rootfs.ext4");
+
+        assert!(script.contains("image_dir=\"$data_root/images\""));
+        assert!(script.contains("destination=\"$image_dir/web-rootfs-rootfs.ext4\""));
+        assert!(script.contains("cat > \"$tmp\""));
+        assert!(script.contains("mv \"$tmp\" \"$destination\""));
+        assert!(script.contains("printf '%s\\n' \"$destination\""));
+    }
+
+    #[test]
+    fn builds_remote_tap_validation_script() {
+        let script = require_tap_interface_script("tap-web");
+
+        assert!(script.contains("tap='tap-web'"));
+        assert!(script.contains("ip link show dev \"$tap\""));
+        assert!(script.contains("grep -q '<[^>]*UP'"));
+        assert!(script.contains("printf '%s\\n' \"$tap\""));
+    }
+
+    #[test]
+    fn builds_remote_tap_ensure_script() {
+        let script = ensure_tap_interface_script("tap-web");
+
+        assert!(script.contains("ip link show dev \"$tap\""));
+        assert!(script.contains("ip tuntap add dev \"$tap\" mode tap"));
+        assert!(script.contains("ip link set \"$tap\" up"));
+        assert!(script.contains("printf '%s\\n' \"$tap\""));
+    }
+
+    #[test]
     fn builds_remote_runtime_dir_display() {
         assert_eq!(
             remote_runtime_dir_display("web"),
@@ -326,5 +623,43 @@ mod tests {
         assert!(script.contains("$data_root/images"));
         assert!(script.contains("$data_root/volumes"));
         assert!(script.contains("printf '%s\\n' \"$runtime_dir\""));
+    }
+
+    #[test]
+    fn builds_remote_firecracker_start_script() {
+        let script = start_firecracker_script(
+            "/usr/local/bin/firecracker",
+            "/run/v/web/firecracker.sock",
+            "/run/v/web/logs",
+        );
+
+        assert!(script.contains("nohup \"$firecracker_bin\" --api-sock \"$api_socket\""));
+        assert!(script.contains("rm -f \"$api_socket\""));
+        assert!(script.contains("[ -S \"$api_socket\" ]"));
+        assert!(script.contains("printf '%s\\n' \"$pid\""));
+    }
+
+    #[test]
+    fn builds_remote_firecracker_api_request_script() {
+        let request =
+            UnixHttpRequest::new("PUT", "/machine-config", r#"{"vcpu_count":1}"#.to_string())
+                .expect("build request");
+        let script = firecracker_api_request_script("/run/v/web/firecracker.sock", &request);
+
+        assert!(script.contains("curl -sS -i --unix-socket \"$api_socket\""));
+        assert!(script.contains("-X 'PUT'"));
+        assert!(script.contains("'http://localhost/machine-config'"));
+        assert!(script.contains(r#"'{"vcpu_count":1}'"#));
+        assert!(script.contains("printf '%s\\n' \"$response\" >&2"));
+    }
+
+    #[test]
+    fn builds_remote_firecracker_stop_script() {
+        let script = stop_firecracker_script(4242, "/run/v/web");
+
+        assert!(script.contains("pid=4242"));
+        assert!(script.contains("kill -TERM \"$pid\""));
+        assert!(script.contains("kill -KILL \"$pid\""));
+        assert!(script.contains("rm -rf \"$runtime_dir\""));
     }
 }

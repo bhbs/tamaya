@@ -42,7 +42,7 @@ impl MachineConfig {
 
     fn to_json(&self) -> String {
         format!(
-            r#"{{"vcpu_count":{},"mem_size_mib":{},"ht_enabled":{}}}"#,
+            r#"{{"vcpu_count":{},"mem_size_mib":{},"smt":{}}}"#,
             self.vcpu_count, self.mem_size_mib, self.ht_enabled
         )
     }
@@ -557,7 +557,7 @@ mod tests {
         assert_eq!(request.path, "/machine-config");
         assert_eq!(
             request.body,
-            r#"{"vcpu_count":2,"mem_size_mib":512,"ht_enabled":false}"#
+            r#"{"vcpu_count":2,"mem_size_mib":512,"smt":false}"#
         );
 
         let payload = String::from_utf8(request.to_http_payload()).unwrap();

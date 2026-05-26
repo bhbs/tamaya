@@ -75,6 +75,10 @@ pub struct RuntimeState {
     pub app: String,
     pub pid: Option<u32>,
     pub api_socket: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_runtime_dir: Option<PathBuf>,
     pub status: RuntimeStatus,
     pub status_message: Option<String>,
 }
@@ -85,6 +89,8 @@ impl RuntimeState {
             app: app.into(),
             pid: None,
             api_socket,
+            worker: None,
+            remote_runtime_dir: None,
             status: RuntimeStatus::Unknown,
             status_message: None,
         }
@@ -103,6 +109,16 @@ impl RuntimeState {
     #[allow(dead_code)]
     pub fn with_pid(mut self, pid: u32) -> Self {
         self.pid = Some(pid);
+        self
+    }
+
+    pub fn with_worker(mut self, worker: impl Into<String>) -> Self {
+        self.worker = Some(worker.into());
+        self
+    }
+
+    pub fn with_remote_runtime_dir(mut self, remote_runtime_dir: impl Into<PathBuf>) -> Self {
+        self.remote_runtime_dir = Some(remote_runtime_dir.into());
         self
     }
 

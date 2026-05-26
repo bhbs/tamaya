@@ -1,11 +1,7 @@
 use std::fs;
-use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::thread;
-use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
@@ -116,40 +112,68 @@ fn run_prepares_runtime_state_and_boot_requests() {
 }
 
 #[test]
-fn run_without_dry_run_reports_remote_worker_gap() {
-    let project = initialized_project("run-remote-gap");
+fn run_with_fake_ssh_boots_remote_firecracker() {
+    let project = initialized_project("run-remote-boot");
     add_worker_config(&project);
+    let local_kernel = project.join("vmlinux");
+    let local_rootfs = project.join("rootfs.ext4");
+    fs::write(&local_kernel, "kernel").expect("write local kernel");
+    fs::write(&local_rootfs, "rootfs").expect("write local rootfs");
     let fake_ssh = fake_ssh_bin(&project);
     let fake_ssh_log = project.join("fake-ssh.log");
 
     let output = v_command(&project)
         .env("V_SSH_BIN", &fake_ssh)
         .env("V_FAKE_SSH_LOG", &fake_ssh_log)
-        .args([
-            "run",
-            "web",
-            "--worker",
-            "vps-prod",
-            "--kernel",
-            "/kernels/vmlinux",
-            "--rootfs",
-            "/images/web.ext4",
-        ])
+        .args(["run", "web", "--worker", "vps-prod", "--kernel"])
+        .arg(&local_kernel)
+        .args(["--rootfs"])
+        .arg(&local_rootfs)
+        .args(["--tap", "tap0"])
         .output()
         .expect("run app");
 
-    assert!(!output.status.success());
-    let stderr = String::from_utf8(output.stderr).expect("stderr is utf-8");
-    assert!(stderr.contains("remote worker execution is not implemented yet"));
+    assert!(output.status.success(), "{output:?}");
+    let stdout = stdout(&output);
+    assert!(stdout.contains("worker: vps-prod (deploy@203.0.113.10)"));
+    assert!(stdout.contains("remote runtime: /tmp/v-fake-runtime/web"));
+    assert!(stdout.contains("api socket: /tmp/v-fake-runtime/web/firecracker.sock"));
+    assert!(stdout.contains("kernel: /tmp/v-fake-images/web-kernel-vmlinux"));
+    assert!(stdout.contains("rootfs: /tmp/v-fake-images/web-rootfs-rootfs.ext4"));
+    assert!(stdout.contains("PUT /machine-config"));
+    assert!(stdout.contains("PUT /boot-source"));
+    assert!(stdout.contains("PUT /drives/rootfs"));
+    assert!(stdout.contains("PUT /network-interfaces/eth0"));
+    assert!(stdout.contains("PUT /actions"));
+    assert!(stdout.contains("pid: 4242"));
+
     let ssh_log = fs::read_to_string(fake_ssh_log).expect("read fake ssh log");
     assert!(ssh_log.contains("uname -s"));
     assert!(ssh_log.contains("/dev/kvm"));
     assert!(ssh_log.contains("XDG_RUNTIME_DIR"));
     assert!(ssh_log.contains("log_dir=\"$runtime_dir/logs\""));
     assert!(ssh_log.contains("mkdir -p \"$data_root/images\" \"$data_root/volumes\""));
-    assert!(ssh_log.contains("kernel"));
-    assert!(ssh_log.contains("rootfs"));
-    assert!(ssh_log.contains("[ -f \"$resolved\" ]"));
+    assert!(ssh_log.contains("web-kernel-vmlinux"));
+    assert!(ssh_log.contains("web-rootfs-rootfs.ext4"));
+    assert!(ssh_log.contains("ip tuntap add dev \"$tap\" mode tap"));
+    assert!(ssh_log.contains("ip link set \"$tap\" up"));
+    assert!(ssh_log.contains("/usr/local/bin/firecracker"));
+    assert!(ssh_log.contains("--api-sock"));
+    assert!(ssh_log.contains("curl"));
+    assert!(ssh_log.contains("/machine-config"));
+    assert!(ssh_log.contains("/boot-source"));
+    assert!(ssh_log.contains("/drives/rootfs"));
+    assert!(ssh_log.contains("/network-interfaces/eth0"));
+    assert!(ssh_log.contains("/actions"));
+
+    let state =
+        fs::read_to_string(project.join("runtime/v/web/state.toml")).expect("read runtime state");
+    assert!(state.contains("app = \"web\""));
+    assert!(state.contains("api_socket = \"/tmp/v-fake-runtime/web/firecracker.sock\""));
+    assert!(state.contains("worker = \"vps-prod\""));
+    assert!(state.contains("remote_runtime_dir = \"/tmp/v-fake-runtime/web\""));
+    assert!(state.contains("status = \"running\""));
+    assert!(state.contains("pid = 4242"));
 
     fs::remove_dir_all(project).expect("remove temp project");
 }
@@ -164,7 +188,14 @@ fn check_validates_worker_without_remote_files() {
     let output = v_command(&project)
         .env("V_SSH_BIN", &fake_ssh)
         .env("V_FAKE_SSH_LOG", &fake_ssh_log)
-        .args(["check", "web", "--worker", "vps-prod"])
+        .args([
+            "check",
+            "web",
+            "--worker",
+            "vps-prod",
+            "--skip-kernel",
+            "--skip-rootfs",
+        ])
         .output()
         .expect("check worker");
 
@@ -173,9 +204,12 @@ fn check_validates_worker_without_remote_files() {
     assert!(stdout.contains("worker: vps-prod (deploy@203.0.113.10)"));
     assert!(stdout.contains("remote runtime:"));
     assert!(stdout.contains("api socket:"));
+    assert!(stdout.contains("tap: tap0"));
     assert!(stdout.contains("ok"));
     let ssh_log = fs::read_to_string(fake_ssh_log).expect("read fake ssh log");
     assert!(ssh_log.contains("uname -s"));
+    assert!(ssh_log.contains("tap='\"'\"'tap0'\"'\"'"));
+    assert!(ssh_log.contains("ip link show dev \"$tap\""));
     assert!(!ssh_log.contains("name='\"'\"'kernel'\"'\"'"));
     assert!(!ssh_log.contains("name='\"'\"'rootfs'\"'\"'"));
 
@@ -183,7 +217,7 @@ fn check_validates_worker_without_remote_files() {
 }
 
 #[test]
-fn check_optionally_validates_remote_files() {
+fn check_validates_all_remote_prerequisites_by_default() {
     let project = initialized_project("check-files");
     add_worker_config(&project);
     let fake_ssh = fake_ssh_bin(&project);
@@ -201,6 +235,8 @@ fn check_optionally_validates_remote_files() {
             "/kernels/vmlinux",
             "--rootfs",
             "$XDG_DATA_HOME/v/images/web.ext4",
+            "--tap",
+            "tap-web",
         ])
         .output()
         .expect("check worker files");
@@ -209,9 +245,32 @@ fn check_optionally_validates_remote_files() {
     let stdout = stdout(&output);
     assert!(stdout.contains("kernel:"));
     assert!(stdout.contains("rootfs:"));
+    assert!(stdout.contains("tap: tap-web"));
     let ssh_log = fs::read_to_string(fake_ssh_log).expect("read fake ssh log");
     assert!(ssh_log.contains("name='\"'\"'kernel'\"'\"'"));
     assert!(ssh_log.contains("name='\"'\"'rootfs'\"'\"'"));
+    assert!(ssh_log.contains("tap='\"'\"'tap-web'\"'\"'"));
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
+#[test]
+fn check_requires_kernel_and_rootfs_unless_skipped() {
+    let project = initialized_project("check-requires-files");
+    add_worker_config(&project);
+    let fake_ssh = fake_ssh_bin(&project);
+    let fake_ssh_log = project.join("fake-ssh.log");
+
+    let output = v_command(&project)
+        .env("V_SSH_BIN", &fake_ssh)
+        .env("V_FAKE_SSH_LOG", &fake_ssh_log)
+        .args(["check", "web", "--worker", "vps-prod"])
+        .output()
+        .expect("check worker");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr is utf-8");
+    assert!(stderr.contains("kernel path is required unless --skip-kernel is passed"));
 
     fs::remove_dir_all(project).expect("remove temp project");
 }
@@ -240,48 +299,42 @@ fn run_rejects_invalid_machine_config() {
 }
 
 #[test]
-#[ignore = "local Firecracker boot is obsolete; remote worker execution is not implemented yet"]
-fn run_boots_with_fake_firecracker_and_stop_cleans_runtime() {
-    let project = initialized_project_at(Path::new("/private/tmp"), "run-boot");
-    let fake_firecracker = fake_firecracker_bin(&project);
-    let api_socket = project.join("runtime/v/web/firecracker.sock");
-    let api_ready = api_socket.with_extension("sock.ready");
-    let api_thread = fake_firecracker_api(api_socket.clone(), api_ready);
-
-    let output = v_command(&project)
-        .args([
-            "run",
-            "web",
-            "--kernel",
-            "/kernels/vmlinux",
-            "--rootfs",
-            "/images/web.ext4",
-            "--firecracker-bin",
-        ])
-        .arg(&fake_firecracker)
-        .args(["--tap", "tap-web"])
-        .output()
-        .expect("run app");
-
-    assert!(output.status.success(), "{output:?}");
-    api_thread.join().expect("fake Firecracker API thread");
-    let run_stdout = stdout(&output);
-    assert!(run_stdout.contains("PUT /actions"));
-    assert!(run_stdout.contains("pid:"));
-
-    let state =
-        fs::read_to_string(project.join("runtime/v/web/state.toml")).expect("read runtime state");
-    assert!(state.contains("status = \"running\""));
-    assert!(state.contains("pid = "));
+fn stop_uses_fake_ssh_for_remote_kill_and_cleanup() {
+    let project = initialized_project("stop-remote");
+    add_worker_config(&project);
+    let fake_ssh = fake_ssh_bin(&project);
+    let fake_ssh_log = project.join("fake-ssh.log");
+    let runtime_dir = project.join("runtime/v/web");
+    fs::create_dir_all(runtime_dir.join("logs")).expect("create local runtime");
+    fs::write(
+        runtime_dir.join("state.toml"),
+        r#"app = "web"
+pid = 4242
+api_socket = "/tmp/v-fake-runtime/web/firecracker.sock"
+worker = "vps-prod"
+remote_runtime_dir = "/tmp/v-fake-runtime/web"
+status = "running"
+status_message = "booted"
+"#,
+    )
+    .expect("write remote runtime state");
 
     let stop = v_command(&project)
+        .env("V_SSH_BIN", &fake_ssh)
+        .env("V_FAKE_SSH_LOG", &fake_ssh_log)
         .args(["stop", "web"])
         .output()
         .expect("stop app");
 
     assert!(stop.status.success(), "{stop:?}");
-    assert_eq!(stdout(&stop), "stop: stopped web\n");
-    assert!(!project.join("runtime/v/web").exists());
+    assert_eq!(stdout(&stop), "stop: stopped web pid 4242\n");
+    assert!(!runtime_dir.exists());
+
+    let ssh_log = fs::read_to_string(fake_ssh_log).expect("read fake ssh log");
+    assert!(ssh_log.contains("kill"));
+    assert!(ssh_log.contains("4242"));
+    assert!(ssh_log.contains("/tmp/v-fake-runtime/web"));
+    assert!(ssh_log.contains("rm -rf"));
 
     fs::remove_dir_all(project).expect("remove temp project");
 }
@@ -374,44 +427,49 @@ fn stdout(output: &std::process::Output) -> String {
     String::from_utf8(output.stdout.clone()).expect("stdout is utf-8")
 }
 
-fn fake_firecracker_bin(project: &Path) -> PathBuf {
-    let path = project.join("fake-firecracker");
-    fs::write(
-        &path,
-        r#"#!/bin/sh
-set -eu
-sock=""
-while [ "$#" -gt 0 ]; do
-    if [ "$1" = "--api-sock" ]; then
-        shift
-        sock="$1"
-    fi
-    shift || true
-done
-
-touch "$sock.ready"
-sleep 60
-"#,
-    )
-    .expect("write fake firecracker");
-
-    let mut permissions = fs::metadata(&path)
-        .expect("read fake firecracker metadata")
-        .permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&path, permissions).expect("mark fake firecracker executable");
-
-    path
-}
-
 fn fake_ssh_bin(project: &Path) -> PathBuf {
     let path = project.join("fake-ssh");
     fs::write(
         &path,
         r#"#!/bin/sh
 set -eu
-printf '%s\n' "$*" >> "${V_FAKE_SSH_LOG:?}"
-printf '%s\n' "$HOME/.local/state/v/runtime/web"
+log="${V_FAKE_SSH_LOG:?}"
+remote_runtime="${V_FAKE_REMOTE_RUNTIME:-/tmp/v-fake-runtime/web}"
+pid="${V_FAKE_FIRECRACKER_PID:-4242}"
+
+printf '%s\n' "$*" >> "$log"
+
+case "$*" in
+  *"destination="*"web-kernel-vmlinux"*)
+    cat >/dev/null
+    printf '%s\n' "/tmp/v-fake-images/web-kernel-vmlinux"
+    ;;
+  *"destination="*"web-rootfs-rootfs.ext4"*)
+    cat >/dev/null
+    printf '%s\n' "/tmp/v-fake-images/web-rootfs-rootfs.ext4"
+    ;;
+  *"--api-sock"* | *"/machine-config"* | *"/actions"*)
+    printf '%s\n' "$pid"
+    ;;
+  *"runtime_dir="*"mkdir -p"*)
+    printf '%s\n' "$remote_runtime"
+    ;;
+  *"name='\"'\"'kernel'\"'\"'"*)
+    printf '%s\n' "/kernels/vmlinux"
+    ;;
+  *"name='\"'\"'rootfs'\"'\"'"*)
+    printf '%s\n' "/images/web.ext4"
+    ;;
+  *"tap='\"'\"'tap0'\"'\"'"*)
+    printf '%s\n' "tap0"
+    ;;
+  *"tap='\"'\"'tap-web'\"'\"'"*)
+    printf '%s\n' "tap-web"
+    ;;
+  *)
+    :
+    ;;
+esac
 "#,
     )
     .expect("write fake ssh");
@@ -423,25 +481,4 @@ printf '%s\n' "$HOME/.local/state/v/runtime/web"
     fs::set_permissions(&path, permissions).expect("mark fake ssh executable");
 
     path
-}
-
-fn fake_firecracker_api(socket_path: PathBuf, ready_path: PathBuf) -> thread::JoinHandle<()> {
-    thread::spawn(move || {
-        while !ready_path.exists() {
-            thread::sleep(Duration::from_millis(10));
-        }
-
-        let listener = UnixListener::bind(&socket_path).expect("bind fake Firecracker API");
-        for _ in 0..5 {
-            let (mut stream, _) = listener.accept().expect("accept Firecracker API request");
-            let mut request = Vec::new();
-            stream
-                .read_to_end(&mut request)
-                .expect("read Firecracker API request");
-            assert!(request.starts_with(b"PUT "));
-            stream
-                .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
-                .expect("write Firecracker API response");
-        }
-    })
 }
