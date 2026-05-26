@@ -1,3 +1,5 @@
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
 default:
     just --list
 
@@ -16,7 +18,10 @@ clippy:
 test:
     cargo test --all-features
 
-ci: fmt-check clippy test
+coverage:
+    cargo llvm-cov --quiet --no-cfg-coverage --all-features --workspace --fail-under-lines 100
+
+ci: fmt-check clippy test coverage
 
 run *args:
     cargo run -- {{args}}

@@ -2,17 +2,17 @@
 
 ## Phase 0: CLI and State Management
 
-- Add `clap` based command parsing.
-- Add shared error handling.
-- Add config model.
-- Implement `v init`.
-- Create local config directory.
-- Create image, volume, and runtime directory settings.
-- Add app registry.
-- Store current image, previous image, volume path, port, and status.
-- Add app-level file locks.
-- Add volume-level file locks.
-- Prevent concurrent deploys for the same app.
+- [x] Add `clap` based command parsing.
+- [x] Add shared error handling.
+- [x] Add config model.
+- [x] Implement `v init`.
+- [x] Create local config directory.
+- [x] Create image, volume, and runtime directory settings.
+- [x] Add app registry.
+- [x] Store current image, previous image, volume path, port, and status.
+- [x] Add app-level file locks.
+- [x] Add volume-level file locks.
+- [x] Prevent concurrent deploys for the same app.
 
 ## Phase 1: Minimal Firecracker Boot
 
