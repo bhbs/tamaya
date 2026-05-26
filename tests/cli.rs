@@ -56,6 +56,70 @@ status = "running"
 }
 
 #[test]
+fn run_prepares_runtime_state_and_boot_requests() {
+    let project = initialized_project("run");
+
+    let output = v_command(&project)
+        .args([
+            "run",
+            "web",
+            "--kernel",
+            "/kernels/vmlinux",
+            "--rootfs",
+            "/images/web.ext4",
+            "--tap",
+            "tap-web",
+            "--vcpu",
+            "2",
+            "--memory-mib",
+            "512",
+        ])
+        .output()
+        .expect("run app");
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = stdout(&output);
+    assert!(stdout.contains("runtime:"));
+    assert!(stdout.contains("api socket:"));
+    assert!(stdout.contains("PUT /machine-config"));
+    assert!(stdout.contains("PUT /boot-source"));
+    assert!(stdout.contains("PUT /drives/rootfs"));
+    assert!(stdout.contains("PUT /network-interfaces/eth0"));
+
+    let state =
+        fs::read_to_string(project.join(".v/runtime/web/state.toml")).expect("read runtime state");
+    assert!(state.contains("app = \"web\""));
+    assert!(state.contains("api_socket = "));
+    assert!(state.contains("status = \"starting\""));
+    assert!(project.join(".v/runtime/web/logs").is_dir());
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
+#[test]
+fn run_rejects_invalid_machine_config() {
+    let project = initialized_project("run-invalid");
+
+    let output = v_command(&project)
+        .args([
+            "run",
+            "web",
+            "--kernel",
+            "/kernels/vmlinux",
+            "--rootfs",
+            "/images/web.ext4",
+            "--vcpu",
+            "0",
+        ])
+        .output()
+        .expect("run app");
+
+    assert!(!output.status.success());
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
+#[test]
 fn stub_commands_load_config_and_take_locks() {
     for command in ["deploy", "rollback", "stop", "logs"] {
         let project = initialized_project(command);

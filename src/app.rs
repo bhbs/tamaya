@@ -1,8 +1,13 @@
 use crate::config::{Config, ensure_local_dir};
+use crate::firecracker::{
+    BootPlan, BootSource, Drive, FirecrackerClient, MachineConfig, NetworkInterface,
+};
 use crate::lock::{LockFile, app_lock_name, volume_lock_name};
 use crate::registry::Registry;
+use crate::runtime::{RuntimeLayout, RuntimeState, RuntimeStatus};
 use anyhow::{Context, Result};
 use std::env;
+use std::path::PathBuf;
 
 pub fn init() -> Result<()> {
     let root = env::current_dir().context("failed to determine current directory")?;
@@ -35,6 +40,49 @@ pub fn ps() -> Result<()> {
 
     for (name, app) in registry.apps {
         println!("{name}\t{:?}\t{}", app.status, app.port);
+    }
+
+    Ok(())
+}
+
+pub fn run(
+    app: &str,
+    kernel: PathBuf,
+    rootfs: PathBuf,
+    tap: &str,
+    boot_args: &str,
+    vcpu: u8,
+    memory_mib: u32,
+) -> Result<()> {
+    let config = load_config()?;
+    let _app_lock = LockFile::acquire(&config.locks_dir, &app_lock_name(app))?;
+
+    let layout = RuntimeLayout::from_runtime_dir(&config.runtime_dir, app);
+    layout.create_dirs()?;
+
+    let plan = BootPlan {
+        machine_config: MachineConfig::new(vcpu, memory_mib)?,
+        boot_source: BootSource::new(kernel, boot_args)?,
+        rootfs: Drive::rootfs(rootfs, true)?,
+        network_interface: NetworkInterface::new("eth0", tap, None)?,
+    };
+    let client = FirecrackerClient::new(layout.api_socket_path())?;
+    let requests = client.build_boot_requests(&plan)?;
+    let _request_bytes: usize = requests
+        .iter()
+        .map(|request| request.to_http_payload().len())
+        .sum();
+
+    RuntimeState::for_layout(&layout)
+        .with_status(RuntimeStatus::Starting)
+        .with_status_message("boot plan prepared")
+        .save(&layout.state_file_path())?;
+    let _state = RuntimeState::load(&layout.state_file_path())?;
+
+    println!("runtime: {}", layout.app_dir().display());
+    println!("api socket: {}", client.api_socket_path().display());
+    for request in requests {
+        println!("{} {}", request.method, request.path);
     }
 
     Ok(())

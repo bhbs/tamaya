@@ -16,13 +16,13 @@
 
 ## Phase 1: Minimal Firecracker Boot
 
-- Read kernel and rootfs paths from config.
-- Start Firecracker process.
-- Create Firecracker API socket.
-- Attach read-only rootfs with `virtio-blk`.
-- Create and attach TAP networking.
-- Boot a microVM.
-- Stop and clean up a microVM.
+- [x] Read kernel and rootfs paths from CLI.
+- [ ] Start Firecracker process.
+- [x] Create Firecracker API socket path.
+- [x] Build read-only rootfs `virtio-blk` API request.
+- [x] Build TAP networking API request.
+- [ ] Boot a microVM.
+- [ ] Stop and clean up a microVM.
 
 ## Phase 2: VM Lifecycle
 

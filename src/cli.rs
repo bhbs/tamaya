@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
 #[command(name = "v")]
@@ -12,6 +13,22 @@ pub struct Cli {
 pub enum Command {
     /// Initialize local host directories and config.
     Init,
+    /// Build a local Firecracker boot plan for an app.
+    Run {
+        app: String,
+        #[arg(long)]
+        kernel: PathBuf,
+        #[arg(long)]
+        rootfs: PathBuf,
+        #[arg(long, default_value = "tap0")]
+        tap: String,
+        #[arg(long, default_value = "console=ttyS0 reboot=k panic=1 pci=off")]
+        boot_args: String,
+        #[arg(long, default_value_t = 1)]
+        vcpu: u8,
+        #[arg(long, default_value_t = 256)]
+        memory_mib: u32,
+    },
     /// Deploy an immutable app image.
     Deploy { app: String },
     /// Roll back an app to the previous image.
@@ -28,6 +45,7 @@ pub enum Command {
 mod tests {
     use super::*;
     use clap::Parser;
+    use std::path::Path;
 
     #[test]
     fn parses_init_command() {
@@ -41,6 +59,36 @@ mod tests {
         let cli = Cli::try_parse_from(["v", "deploy", "myapp"]).expect("parse deploy command");
 
         assert!(matches!(cli.command, Command::Deploy { app } if app == "myapp"));
+    }
+
+    #[test]
+    fn parses_run_command() {
+        let cli = Cli::try_parse_from([
+            "v",
+            "run",
+            "web",
+            "--kernel",
+            "/kernels/vmlinux",
+            "--rootfs",
+            "/images/web.ext4",
+            "--tap",
+            "tap-web",
+            "--vcpu",
+            "2",
+            "--memory-mib",
+            "512",
+        ])
+        .expect("parse run command");
+
+        assert!(
+            matches!(cli.command, Command::Run { app, kernel, rootfs, tap, vcpu, memory_mib, .. }
+                if app == "web"
+                    && kernel == Path::new("/kernels/vmlinux")
+                    && rootfs == Path::new("/images/web.ext4")
+                    && tap == "tap-web"
+                    && vcpu == 2
+                    && memory_mib == 512)
+        );
     }
 
     #[test]
