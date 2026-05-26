@@ -15,12 +15,12 @@ fn init_creates_project_local_state() {
     let output = v_command(&project).arg("init").output().expect("run init");
 
     assert!(output.status.success());
-    assert!(project.join(".v/config.toml").is_file());
-    assert!(project.join(".v/registry.toml").is_file());
-    assert!(project.join(".v/images").is_dir());
-    assert!(project.join(".v/volumes").is_dir());
-    assert!(project.join(".v/runtime").is_dir());
-    assert!(project.join(".v/locks").is_dir());
+    assert!(project.join(".config/v/config.toml").is_file());
+    assert!(project.join(".local/state/v/registry.toml").is_file());
+    assert!(project.join(".local/share/v/images").is_dir());
+    assert!(project.join(".local/share/v/volumes").is_dir());
+    assert!(project.join("runtime/v").is_dir());
+    assert!(project.join("runtime/v/locks").is_dir());
 
     fs::remove_dir_all(project).expect("remove temp project");
 }
@@ -41,7 +41,7 @@ fn ps_reports_empty_registry() {
 fn ps_reports_registered_apps() {
     let project = initialized_project("ps-apps");
     fs::write(
-        project.join(".v/registry.toml"),
+        project.join(".local/state/v/registry.toml"),
         r#"[apps.web]
 current_image = "/images/web-v2.ext4"
 previous_image = "/images/web-v1.ext4"
@@ -63,6 +63,7 @@ status = "running"
 #[test]
 fn run_prepares_runtime_state_and_boot_requests() {
     let project = initialized_project("run");
+    add_worker_config(&project);
 
     let output = v_command(&project)
         .args([
@@ -72,6 +73,8 @@ fn run_prepares_runtime_state_and_boot_requests() {
             "/kernels/vmlinux",
             "--rootfs",
             "/images/web.ext4",
+            "--worker",
+            "vps-prod",
             "--tap",
             "tap-web",
             "--vcpu",
@@ -86,6 +89,13 @@ fn run_prepares_runtime_state_and_boot_requests() {
     assert!(output.status.success(), "{output:?}");
     let stdout = stdout(&output);
     assert!(stdout.contains("runtime:"));
+    assert!(stdout.contains("worker: vps-prod (deploy@203.0.113.10)"));
+    assert!(stdout.contains(
+        "remote runtime: ${XDG_RUNTIME_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/v/runtime}/v/web"
+    ));
+    assert!(stdout.contains(
+        "api socket: ${XDG_RUNTIME_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/v/runtime}/v/web/firecracker.sock"
+    ));
     assert!(stdout.contains("api socket:"));
     assert!(stdout.contains("PUT /machine-config"));
     assert!(stdout.contains("PUT /boot-source"));
@@ -94,11 +104,47 @@ fn run_prepares_runtime_state_and_boot_requests() {
     assert!(stdout.contains("PUT /actions"));
 
     let state =
-        fs::read_to_string(project.join(".v/runtime/web/state.toml")).expect("read runtime state");
+        fs::read_to_string(project.join("runtime/v/web/state.toml")).expect("read runtime state");
     assert!(state.contains("app = \"web\""));
     assert!(state.contains("api_socket = "));
     assert!(state.contains("status = \"starting\""));
-    assert!(project.join(".v/runtime/web/logs").is_dir());
+    assert!(project.join("runtime/v/web/logs").is_dir());
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
+#[test]
+fn run_without_dry_run_reports_remote_worker_gap() {
+    let project = initialized_project("run-remote-gap");
+    add_worker_config(&project);
+    let fake_ssh = fake_ssh_bin(&project);
+    let fake_ssh_log = project.join("fake-ssh.log");
+
+    let output = v_command(&project)
+        .env("V_SSH_BIN", &fake_ssh)
+        .env("V_FAKE_SSH_LOG", &fake_ssh_log)
+        .args([
+            "run",
+            "web",
+            "--worker",
+            "vps-prod",
+            "--kernel",
+            "/kernels/vmlinux",
+            "--rootfs",
+            "/images/web.ext4",
+        ])
+        .output()
+        .expect("run app");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr is utf-8");
+    assert!(stderr.contains("remote worker execution is not implemented yet"));
+    let ssh_log = fs::read_to_string(fake_ssh_log).expect("read fake ssh log");
+    assert!(ssh_log.contains("uname -s"));
+    assert!(ssh_log.contains("/dev/kvm"));
+    assert!(ssh_log.contains("XDG_RUNTIME_DIR"));
+    assert!(ssh_log.contains("log_dir=\"$runtime_dir/logs\""));
+    assert!(ssh_log.contains("mkdir -p \"$data_root/images\" \"$data_root/volumes\""));
 
     fs::remove_dir_all(project).expect("remove temp project");
 }
@@ -127,11 +173,11 @@ fn run_rejects_invalid_machine_config() {
 }
 
 #[test]
-#[ignore = "requires Unix domain sockets, which are blocked in the sandboxed test environment"]
+#[ignore = "local Firecracker boot is obsolete; remote worker execution is not implemented yet"]
 fn run_boots_with_fake_firecracker_and_stop_cleans_runtime() {
     let project = initialized_project_at(Path::new("/private/tmp"), "run-boot");
     let fake_firecracker = fake_firecracker_bin(&project);
-    let api_socket = project.join(".v/runtime/web/firecracker.sock");
+    let api_socket = project.join("runtime/v/web/firecracker.sock");
     let api_ready = api_socket.with_extension("sock.ready");
     let api_thread = fake_firecracker_api(api_socket.clone(), api_ready);
 
@@ -157,7 +203,7 @@ fn run_boots_with_fake_firecracker_and_stop_cleans_runtime() {
     assert!(run_stdout.contains("pid:"));
 
     let state =
-        fs::read_to_string(project.join(".v/runtime/web/state.toml")).expect("read runtime state");
+        fs::read_to_string(project.join("runtime/v/web/state.toml")).expect("read runtime state");
     assert!(state.contains("status = \"running\""));
     assert!(state.contains("pid = "));
 
@@ -168,7 +214,7 @@ fn run_boots_with_fake_firecracker_and_stop_cleans_runtime() {
 
     assert!(stop.status.success(), "{stop:?}");
     assert_eq!(stdout(&stop), "stop: stopped web\n");
-    assert!(!project.join(".v/runtime/web").exists());
+    assert!(!project.join("runtime/v/web").exists());
 
     fs::remove_dir_all(project).expect("remove temp project");
 }
@@ -214,9 +260,30 @@ fn initialized_project_at(parent: &Path, name: &str) -> PathBuf {
     project
 }
 
+fn add_worker_config(project: &Path) {
+    let config_path = project.join(".config/v/config.toml");
+    let mut config = fs::read_to_string(&config_path).expect("read config");
+    config.push_str(
+        r#"
+default_worker = "vps-prod"
+
+[workers.vps-prod]
+host = "203.0.113.10"
+user = "deploy"
+firecracker_bin = "/usr/local/bin/firecracker"
+"#,
+    );
+    fs::write(config_path, config).expect("write worker config");
+}
+
 fn v_command(project: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_v"));
     command.current_dir(project);
+    command.env("HOME", project);
+    command.env("XDG_CONFIG_HOME", project.join(".config"));
+    command.env("XDG_DATA_HOME", project.join(".local/share"));
+    command.env("XDG_STATE_HOME", project.join(".local/state"));
+    command.env("XDG_RUNTIME_DIR", project.join("runtime"));
     command
 }
 
@@ -266,6 +333,27 @@ sleep 60
         .permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(&path, permissions).expect("mark fake firecracker executable");
+
+    path
+}
+
+fn fake_ssh_bin(project: &Path) -> PathBuf {
+    let path = project.join("fake-ssh");
+    fs::write(
+        &path,
+        r#"#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "${V_FAKE_SSH_LOG:?}"
+printf '%s\n' "$HOME/.local/state/v/runtime/web"
+"#,
+    )
+    .expect("write fake ssh");
+
+    let mut permissions = fs::metadata(&path)
+        .expect("read fake ssh metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&path, permissions).expect("mark fake ssh executable");
 
     path
 }

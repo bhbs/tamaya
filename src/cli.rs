@@ -11,11 +11,13 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Initialize local host directories and config.
+    /// Initialize local controller directories and config.
     Init,
-    /// Build a local Firecracker boot plan for an app.
+    /// Build a Linux worker Firecracker boot plan for an app.
     Run {
         app: String,
+        #[arg(long)]
+        worker: Option<String>,
         #[arg(long)]
         kernel: PathBuf,
         #[arg(long)]
@@ -75,6 +77,8 @@ mod tests {
             "/kernels/vmlinux",
             "--rootfs",
             "/images/web.ext4",
+            "--worker",
+            "vps-prod",
             "--tap",
             "tap-web",
             "--vcpu",
@@ -85,8 +89,9 @@ mod tests {
         .expect("parse run command");
 
         assert!(
-            matches!(cli.command, Command::Run { app, kernel, rootfs, tap, vcpu, memory_mib, dry_run, .. }
+            matches!(cli.command, Command::Run { app, worker, kernel, rootfs, tap, vcpu, memory_mib, dry_run, .. }
                 if app == "web"
+                    && worker.as_deref() == Some("vps-prod")
                     && kernel == Path::new("/kernels/vmlinux")
                     && rootfs == Path::new("/images/web.ext4")
                     && tap == "tap-web"

@@ -5,6 +5,7 @@ mod firecracker;
 mod lock;
 mod registry;
 mod runtime;
+mod ssh;
 
 use anyhow::Result;
 use app::RunOptions;
@@ -18,6 +19,7 @@ fn main() -> Result<()> {
         Command::Init => app::init(),
         Command::Run {
             app,
+            worker,
             kernel,
             rootfs,
             firecracker_bin,
@@ -28,6 +30,7 @@ fn main() -> Result<()> {
             dry_run,
         } => app::run(RunOptions {
             app,
+            worker,
             kernel,
             rootfs,
             firecracker_bin,

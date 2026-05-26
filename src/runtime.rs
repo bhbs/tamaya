@@ -98,6 +98,7 @@ impl RuntimeState {
         self
     }
 
+    #[allow(dead_code)]
     pub fn with_pid(mut self, pid: u32) -> Self {
         self.pid = Some(pid);
         self

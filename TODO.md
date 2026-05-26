@@ -6,41 +6,55 @@
 - [x] Add shared error handling.
 - [x] Add config model.
 - [x] Implement `v init`.
-- [x] Create local config directory.
-- [x] Create image, volume, and runtime directory settings.
+- [x] Create local controller config directory using XDG Base Directory paths.
+- [x] Create initial image, volume, state, lock, and runtime directory settings using XDG Base Directory paths.
 - [x] Add app registry.
 - [x] Store current image, previous image, volume path, port, and status.
 - [x] Add app-level file locks.
 - [x] Add volume-level file locks.
 - [x] Prevent concurrent deploys for the same app.
+- [x] Add worker configuration for SSH targets.
+- [ ] Separate Mac controller state from Linux worker paths.
+- [ ] Treat kernel, rootfs, volume, runtime, and API socket paths as worker-side paths.
 
-## Phase 1: Minimal Firecracker Boot
+## Phase 1: Remote Worker Foundation
+
+- [x] Add `--worker` selection or default worker config.
+- [x] Add SSH command runner.
+- [ ] Add remote file/path validation helpers.
+- [x] Add worker capability checks for Linux, KVM, Firecracker, networking, and permissions.
+- [x] Add remote runtime path conventions.
+- [x] Add remote runtime directory creation.
+- [x] Add remote log directory path conventions.
+
+## Phase 2: Minimal Firecracker Boot on Linux Worker
 
 - [x] Read kernel and rootfs paths from CLI.
-- [x] Start Firecracker process.
-- [x] Create Firecracker API socket path.
+- [ ] Start Firecracker process over SSH on the worker.
+- [ ] Create Firecracker API socket path on the worker.
 - [x] Build read-only rootfs `virtio-blk` API request.
 - [x] Build TAP networking API request.
-- [x] Boot a microVM.
-- [x] Stop and clean up a microVM.
+- [ ] Send Firecracker API requests against the worker-side socket.
+- [ ] Boot a microVM on the worker.
+- [ ] Stop and clean up a worker microVM.
 
-## Phase 2: VM Lifecycle
+## Phase 3: VM Lifecycle
 
 - Implement `v ps`.
 - Implement `v stop <app>`.
-- Track PID, socket path, and runtime directory.
+- Track worker host, PID, socket path, and runtime directory.
 - Clean up stale runtime state.
 - Implement `v logs <app>`.
 
-## Phase 3: Volumes
+## Phase 4: Volumes
 
 - Implement `v volume create <app>`.
-- Manage ext4 data volume files or block devices.
+- Manage ext4 data volume files or block devices on the worker.
 - Enforce attach policy.
 - Enforce single-writer volume locks.
 - Attach persistent data volume to the guest.
 
-## Phase 4: Deploy
+## Phase 5: Deploy
 
 - Boot a new VM from an immutable image.
 - Run health checks.
@@ -50,7 +64,7 @@
 - Stop the old VM.
 - Update app registry after a successful switch.
 
-## Phase 5: Rollback
+## Phase 6: Rollback
 
 - Store previous image metadata.
 - Boot rollback VM.
@@ -59,10 +73,11 @@
 - Stop failed or replaced VM.
 - Keep DB schema rollback out of scope for the first implementation.
 
-## Phase 6: Image Build
+## Phase 7: Image Build
 
 - Accept existing ext4 rootfs images first.
-- Add Docker export based image creation.
+- Add Docker export based image creation on Mac or dedicated builder.
+- Upload or sync built images to the worker.
 - Add dedicated image builder later.
 
 ## Future Work

@@ -1,19 +1,19 @@
-use crate::config::{Config, ensure_local_dir};
+use crate::config::Config;
 use crate::firecracker::{
-    BootPlan, BootSource, Drive, FirecrackerClient, FirecrackerProcess, MachineConfig,
-    NetworkInterface,
+    BootPlan, BootSource, Drive, FirecrackerClient, MachineConfig, NetworkInterface,
 };
 use crate::lock::{LockFile, app_lock_name, volume_lock_name};
 use crate::registry::Registry;
 use crate::runtime::{RuntimeLayout, RuntimeState, RuntimeStatus};
-use anyhow::{Context, Result};
-use std::env;
-use std::path::PathBuf;
+use crate::ssh::{SshRunner, remote_runtime_dir_display};
+use anyhow::{Context, Result, bail};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct RunOptions {
     pub app: String,
+    pub worker: Option<String>,
     pub kernel: PathBuf,
     pub rootfs: PathBuf,
     pub firecracker_bin: PathBuf,
@@ -25,21 +25,14 @@ pub struct RunOptions {
 }
 
 pub fn init() -> Result<()> {
-    let root = env::current_dir().context("failed to determine current directory")?;
-
-    ensure_local_dir(&root)?;
-
-    let config = Config::default_for(&root);
+    let config = Config::default_from_env()?;
     config.create_dirs()?;
-    config.save(&root)?;
+    config.save_to_env()?;
 
     let registry = Registry::load(&config.registry_file)?;
     registry.save(&config.registry_file)?;
 
-    println!(
-        "initialized {}",
-        root.join(crate::config::LOCAL_DIR).display()
-    );
+    println!("initialized {}", config.registry_file.display());
 
     Ok(())
 }
@@ -67,6 +60,18 @@ pub fn run(options: RunOptions) -> Result<()> {
 
     let layout = RuntimeLayout::from_runtime_dir(&config.runtime_dir, app);
     layout.create_dirs()?;
+    let worker = resolve_worker(&config, options.worker.as_deref(), options.dry_run)?;
+    let mut remote_runtime = worker.map(|_| remote_runtime_dir_display(app));
+    if !options.dry_run {
+        let (_, worker) = worker.expect("worker is required for non dry-run");
+        let runner = SshRunner::new(worker.clone());
+        remote_runtime = Some(runner.create_runtime_dirs(app)?);
+        runner.check_capabilities()?;
+    }
+    let api_socket_path = remote_runtime
+        .as_deref()
+        .map(|runtime| Path::new(runtime).join("firecracker.sock"))
+        .unwrap_or_else(|| layout.api_socket_path());
 
     let plan = BootPlan {
         machine_config: MachineConfig::new(options.vcpu, options.memory_mib)?,
@@ -74,7 +79,7 @@ pub fn run(options: RunOptions) -> Result<()> {
         rootfs: Drive::rootfs(options.rootfs, true)?,
         network_interface: NetworkInterface::new("eth0", options.tap, None)?,
     };
-    let client = FirecrackerClient::new(layout.api_socket_path())?;
+    let client = FirecrackerClient::new(api_socket_path)?;
     let requests = client.build_boot_requests(&plan)?;
     let start_request = client.start_instance()?;
     let _request_bytes: usize = requests
@@ -83,35 +88,26 @@ pub fn run(options: RunOptions) -> Result<()> {
         .map(|request| request.to_http_payload().len())
         .sum();
 
-    let mut state = RuntimeState::for_layout(&layout)
+    let state = RuntimeState::for_layout(&layout)
         .with_status(RuntimeStatus::Starting)
         .with_status_message("boot plan prepared");
 
     if !options.dry_run {
-        let process = FirecrackerProcess::start(
-            &options.firecracker_bin,
-            &layout.api_socket_path(),
-            &layout.log_dir(),
-        )?;
-        state = state
-            .with_pid(process.pid())
-            .with_status_message("firecracker process started");
-        state.save(&layout.state_file_path())?;
-
-        if let Err(error) = client.boot(&plan) {
-            let _ = terminate_process(process.pid());
-            return Err(error).context("failed to boot microVM");
-        }
-
-        state = state
-            .with_status(RuntimeStatus::Running)
-            .with_status_message("microVM booted");
+        bail!(
+            "remote worker execution is not implemented yet; run with --dry-run to inspect the boot plan"
+        );
     }
 
     state.save(&layout.state_file_path())?;
     let _state = RuntimeState::load(&layout.state_file_path())?;
 
     println!("runtime: {}", layout.app_dir().display());
+    if let Some((name, worker)) = worker {
+        println!("worker: {name} ({})", worker.ssh_target());
+        if let Some(remote_runtime) = &remote_runtime {
+            println!("remote runtime: {remote_runtime}");
+        }
+    }
     println!("api socket: {}", client.api_socket_path().display());
     for request in requests {
         println!("{} {}", request.method, request.path);
@@ -122,6 +118,18 @@ pub fn run(options: RunOptions) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn resolve_worker<'a>(
+    config: &'a Config,
+    selected: Option<&str>,
+    dry_run: bool,
+) -> Result<Option<(&'a str, &'a crate::config::WorkerConfig)>> {
+    if dry_run && selected.is_none() && config.default_worker.is_none() {
+        return Ok(None);
+    }
+
+    config.worker(selected).map(Some)
 }
 
 pub fn deploy(app: &str) -> Result<()> {
@@ -177,8 +185,7 @@ pub fn logs(app: &str) -> Result<()> {
 }
 
 fn load_config() -> Result<Config> {
-    let root = env::current_dir().context("failed to determine current directory")?;
-    Config::load(&root)
+    Config::load_from_env()
 }
 
 fn terminate_process(pid: u32) -> Result<()> {

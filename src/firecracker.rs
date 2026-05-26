@@ -13,6 +13,7 @@ const MAX_PATH_BYTES: usize = 4096;
 const MAX_ID_BYTES: usize = 64;
 const MAX_BOOT_ARGS_BYTES: usize = 4096;
 const API_HOST: &str = "localhost";
+#[allow(dead_code)]
 const FIRECRACKER_SOCKET_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -275,6 +276,7 @@ impl FirecrackerClient {
         )
     }
 
+    #[allow(dead_code)]
     pub fn send(&self, request: &UnixHttpRequest) -> Result<()> {
         let mut stream = UnixStream::connect(&self.api_socket_path).context(format!(
             "failed to connect to Firecracker API socket {}",
@@ -298,6 +300,7 @@ impl FirecrackerClient {
         ensure_success_response(&response, request)
     }
 
+    #[allow(dead_code)]
     pub fn boot(&self, plan: &BootPlan) -> Result<()> {
         for request in self.build_boot_requests(plan)? {
             self.send(&request)?;
@@ -312,6 +315,7 @@ pub struct FirecrackerProcess {
     child: Child,
 }
 
+#[allow(dead_code)]
 impl FirecrackerProcess {
     pub fn start(
         binary: &Path,
@@ -392,6 +396,7 @@ fn validate_path(name: &str, path: &Path) -> Result<()> {
     validate_bounded(name, &path, MAX_PATH_BYTES)
 }
 
+#[allow(dead_code)]
 fn remove_stale_socket(path: &Path) -> Result<()> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
@@ -403,6 +408,7 @@ fn remove_stale_socket(path: &Path) -> Result<()> {
     }
 }
 
+#[allow(dead_code)]
 fn ensure_success_response(response: &str, request: &UnixHttpRequest) -> Result<()> {
     let status_line = response.lines().next().unwrap_or_default();
     let success = status_line.starts_with("HTTP/1.1 2") || status_line.starts_with("HTTP/1.0 2");
@@ -423,6 +429,7 @@ fn ensure_success_response(response: &str, request: &UnixHttpRequest) -> Result<
     )
 }
 
+#[allow(dead_code)]
 fn read_http_response(stream: &mut UnixStream) -> Result<String> {
     let mut response = Vec::new();
     let mut buffer = [0; 4096];
@@ -452,6 +459,7 @@ fn read_http_response(stream: &mut UnixStream) -> Result<String> {
     String::from_utf8(response).context("Firecracker API response is not utf-8")
 }
 
+#[allow(dead_code)]
 fn response_has_complete_body(response: &[u8]) -> bool {
     let Some(header_end) = find_header_end(response) else {
         return false;
@@ -467,10 +475,12 @@ fn response_has_complete_body(response: &[u8]) -> bool {
     response.len() >= header_end + 4 + content_length
 }
 
+#[allow(dead_code)]
 fn find_header_end(response: &[u8]) -> Option<usize> {
     response.windows(4).position(|window| window == b"\r\n\r\n")
 }
 
+#[allow(dead_code)]
 fn parse_content_length(line: &str) -> Option<usize> {
     let (name, value) = line.split_once(':')?;
     if !name.eq_ignore_ascii_case("content-length") {
