@@ -5,7 +5,7 @@ use crate::firecracker::{
 use crate::lock::{LockFile, app_lock_name, volume_lock_name};
 use crate::registry::Registry;
 use crate::runtime::{RuntimeLayout, RuntimeState, RuntimeStatus};
-use crate::ssh::{SshRunner, remote_runtime_dir_display};
+use crate::ssh::{SshRunner, remote_runtime_dir_display, validate_remote_name};
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -22,6 +22,14 @@ pub struct RunOptions {
     pub vcpu: u8,
     pub memory_mib: u32,
     pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct CheckOptions {
+    pub app: String,
+    pub worker: Option<String>,
+    pub kernel: Option<PathBuf>,
+    pub rootfs: Option<PathBuf>,
 }
 
 pub fn init() -> Result<()> {
@@ -56,17 +64,22 @@ pub fn ps() -> Result<()> {
 pub fn run(options: RunOptions) -> Result<()> {
     let config = load_config()?;
     let app = options.app.as_str();
+    validate_remote_name("app", app)?;
     let _app_lock = LockFile::acquire(&config.locks_dir, &app_lock_name(app))?;
 
     let layout = RuntimeLayout::from_runtime_dir(&config.runtime_dir, app);
     layout.create_dirs()?;
     let worker = resolve_worker(&config, options.worker.as_deref(), options.dry_run)?;
     let mut remote_runtime = worker.map(|_| remote_runtime_dir_display(app));
+    let mut kernel = options.kernel.clone();
+    let mut rootfs = options.rootfs.clone();
     if !options.dry_run {
         let (_, worker) = worker.expect("worker is required for non dry-run");
         let runner = SshRunner::new(worker.clone());
         remote_runtime = Some(runner.create_runtime_dirs(app)?);
         runner.check_capabilities()?;
+        kernel = PathBuf::from(runner.require_readable_file("kernel", &options.kernel)?);
+        rootfs = PathBuf::from(runner.require_readable_file("rootfs", &options.rootfs)?);
     }
     let api_socket_path = remote_runtime
         .as_deref()
@@ -75,8 +88,8 @@ pub fn run(options: RunOptions) -> Result<()> {
 
     let plan = BootPlan {
         machine_config: MachineConfig::new(options.vcpu, options.memory_mib)?,
-        boot_source: BootSource::new(options.kernel, options.boot_args)?,
-        rootfs: Drive::rootfs(options.rootfs, true)?,
+        boot_source: BootSource::new(kernel, options.boot_args)?,
+        rootfs: Drive::rootfs(rootfs, true)?,
         network_interface: NetworkInterface::new("eth0", options.tap, None)?,
     };
     let client = FirecrackerClient::new(api_socket_path)?;
@@ -88,15 +101,9 @@ pub fn run(options: RunOptions) -> Result<()> {
         .map(|request| request.to_http_payload().len())
         .sum();
 
-    let state = RuntimeState::for_layout(&layout)
+    let state = RuntimeState::new(app.to_string(), client.api_socket_path().to_path_buf())
         .with_status(RuntimeStatus::Starting)
         .with_status_message("boot plan prepared");
-
-    if !options.dry_run {
-        bail!(
-            "remote worker execution is not implemented yet; run with --dry-run to inspect the boot plan"
-        );
-    }
 
     state.save(&layout.state_file_path())?;
     let _state = RuntimeState::load(&layout.state_file_path())?;
@@ -114,8 +121,49 @@ pub fn run(options: RunOptions) -> Result<()> {
     }
     println!("{} {}", start_request.method, start_request.path);
     if !options.dry_run {
-        println!("pid: {}", state.pid.expect("running state has a pid"));
+        bail!(
+            "remote worker execution is not implemented yet; remote foundation completed through runtime setup and path validation"
+        );
     }
+
+    Ok(())
+}
+
+pub fn check(options: CheckOptions) -> Result<()> {
+    let config = load_config()?;
+    let app = options.app.as_str();
+    validate_remote_name("app", app)?;
+    let (worker_name, worker) = config.worker(options.worker.as_deref())?;
+    let runner = SshRunner::new(worker.clone());
+
+    let remote_runtime = runner.create_runtime_dirs(app)?;
+    runner.check_capabilities()?;
+    let kernel = options
+        .kernel
+        .as_deref()
+        .map(|path| runner.require_readable_file("kernel", path))
+        .transpose()?;
+    let rootfs = options
+        .rootfs
+        .as_deref()
+        .map(|path| runner.require_readable_file("rootfs", path))
+        .transpose()?;
+
+    println!("worker: {worker_name} ({})", worker.ssh_target());
+    println!("remote runtime: {remote_runtime}");
+    println!(
+        "api socket: {}",
+        Path::new(&remote_runtime)
+            .join("firecracker.sock")
+            .display()
+    );
+    if let Some(kernel) = kernel {
+        println!("kernel: {kernel}");
+    }
+    if let Some(rootfs) = rootfs {
+        println!("rootfs: {rootfs}");
+    }
+    println!("ok");
 
     Ok(())
 }

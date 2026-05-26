@@ -1,6 +1,7 @@
 use crate::config::WorkerConfig;
 use anyhow::{Context, Result, bail};
 use std::ffi::OsString;
+use std::path::Path;
 use std::process::{Command, Output};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -66,6 +67,7 @@ impl SshRunner {
     }
 
     pub fn create_runtime_dirs(&self, app: &str) -> Result<String> {
+        validate_remote_name("app", app)?;
         let output = self
             .run_shell(&create_runtime_dirs_script(app))
             .context("failed to create remote XDG runtime directories")?;
@@ -77,10 +79,43 @@ impl SshRunner {
 
         Ok(runtime_dir.to_string())
     }
+
+    pub fn require_readable_file(&self, name: &str, path: &Path) -> Result<String> {
+        let path = path_to_remote_string(path)?;
+        let output = self
+            .run_shell(&require_readable_file_script(name, &path))
+            .context(format!("failed to validate remote {name} path {path}"))?;
+        let stdout = String::from_utf8(output.stdout).context("ssh stdout is not utf-8")?;
+        let resolved = stdout
+            .lines()
+            .next()
+            .context(format!("remote {name} path was not reported"))?;
+
+        Ok(resolved.to_string())
+    }
 }
 
 pub fn remote_runtime_dir_display(app: &str) -> String {
     format!("${{XDG_RUNTIME_DIR:-${{XDG_STATE_HOME:-$HOME/.local/state}}/v/runtime}}/v/{app}")
+}
+
+pub fn validate_remote_name(name: &str, value: &str) -> Result<()> {
+    if value.is_empty() {
+        bail!("{name} must not be empty");
+    }
+
+    if value.len() > 64 {
+        bail!("{name} exceeds 64 bytes");
+    }
+
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        bail!("{name} must contain only ASCII letters, digits, '.', '_', or '-'");
+    }
+
+    Ok(())
 }
 
 fn shell_quote(value: &str) -> String {
@@ -110,6 +145,47 @@ else
 fi
 "#,
         firecracker_bin = shell_quote(firecracker_bin)
+    )
+}
+
+fn require_readable_file_script(name: &str, path: &str) -> String {
+    format!(
+        r#"set -eu
+name={name}
+input={path}
+case "$input" in
+  '$XDG_DATA_HOME/'*)
+    suffix="${{input#\$XDG_DATA_HOME/}}"
+    base="${{XDG_DATA_HOME:-$HOME/.local/share}}"
+    resolved="$base/$suffix"
+    ;;
+  '$XDG_STATE_HOME/'*)
+    suffix="${{input#\$XDG_STATE_HOME/}}"
+    base="${{XDG_STATE_HOME:-$HOME/.local/state}}"
+    resolved="$base/$suffix"
+    ;;
+  '$XDG_RUNTIME_DIR/'*)
+    suffix="${{input#\$XDG_RUNTIME_DIR/}}"
+    if [ -z "${{XDG_RUNTIME_DIR:-}}" ]; then
+      echo "$name uses XDG_RUNTIME_DIR but it is not set" >&2
+      exit 1
+    fi
+    resolved="$XDG_RUNTIME_DIR/$suffix"
+    ;;
+  /*)
+    resolved="$input"
+    ;;
+  *)
+    echo "$name must be an absolute path or start with \$XDG_DATA_HOME/, \$XDG_STATE_HOME/, or \$XDG_RUNTIME_DIR/" >&2
+    exit 1
+    ;;
+esac
+[ -f "$resolved" ] || {{ echo "$name does not exist or is not a file: $resolved" >&2; exit 1; }}
+[ -r "$resolved" ] || {{ echo "$name is not readable: $resolved" >&2; exit 1; }}
+printf '%s\n' "$resolved"
+"#,
+        name = shell_quote(name),
+        path = shell_quote(path)
     )
 }
 
@@ -144,6 +220,23 @@ fn shell_escape_for_double_quotes(value: &str) -> String {
 
 fn ssh_bin() -> OsString {
     std::env::var_os("V_SSH_BIN").unwrap_or_else(|| OsString::from("ssh"))
+}
+
+fn path_to_remote_string(path: &Path) -> Result<String> {
+    let value = path
+        .to_str()
+        .context("remote path must be valid UTF-8")?
+        .to_string();
+
+    if value.is_empty() {
+        bail!("remote path must not be empty");
+    }
+
+    if value.len() > 4096 {
+        bail!("remote path exceeds 4096 bytes");
+    }
+
+    Ok(value)
 }
 
 #[cfg(test)]
@@ -195,6 +288,23 @@ mod tests {
         assert!(script.contains("[ -e /dev/kvm ]"));
         assert!(script.contains("command -v ip >/dev/null"));
         assert!(script.contains("[ -x '/usr/local/bin/firecracker' ]"));
+    }
+
+    #[test]
+    fn validates_remote_names() {
+        assert!(validate_remote_name("app", "web-1.prod").is_ok());
+        assert!(validate_remote_name("app", "").is_err());
+        assert!(validate_remote_name("app", "../web").is_err());
+        assert!(validate_remote_name("app", "web/api").is_err());
+    }
+
+    #[test]
+    fn builds_remote_file_validation_script() {
+        let script = require_readable_file_script("rootfs", "$XDG_DATA_HOME/v/images/web.ext4");
+
+        assert!(script.contains("XDG_DATA_HOME"));
+        assert!(script.contains("[ -f \"$resolved\" ]"));
+        assert!(script.contains("rootfs"));
     }
 
     #[test]

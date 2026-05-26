@@ -35,6 +35,16 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Check Linux worker readiness and optionally validate remote files.
+    Check {
+        app: String,
+        #[arg(long)]
+        worker: Option<String>,
+        #[arg(long)]
+        kernel: Option<PathBuf>,
+        #[arg(long)]
+        rootfs: Option<PathBuf>,
+    },
     /// Deploy an immutable app image.
     Deploy { app: String },
     /// Roll back an app to the previous image.
@@ -98,6 +108,44 @@ mod tests {
                     && vcpu == 2
                     && memory_mib == 512
                     && !dry_run)
+        );
+    }
+
+    #[test]
+    fn parses_check_command() {
+        let cli = Cli::try_parse_from(["v", "check", "web", "--worker", "vps-prod"])
+            .expect("parse check command");
+
+        assert!(
+            matches!(cli.command, Command::Check { app, worker, kernel, rootfs }
+                if app == "web"
+                    && worker.as_deref() == Some("vps-prod")
+                    && kernel.is_none()
+                    && rootfs.is_none())
+        );
+    }
+
+    #[test]
+    fn parses_check_command_with_files() {
+        let cli = Cli::try_parse_from([
+            "v",
+            "check",
+            "web",
+            "--worker",
+            "vps-prod",
+            "--kernel",
+            "/kernels/vmlinux",
+            "--rootfs",
+            "$XDG_DATA_HOME/v/images/web.ext4",
+        ])
+        .expect("parse check command");
+
+        assert!(
+            matches!(cli.command, Command::Check { app, worker, kernel, rootfs }
+                if app == "web"
+                    && worker.as_deref() == Some("vps-prod")
+                    && kernel.as_deref() == Some(Path::new("/kernels/vmlinux"))
+                    && rootfs.as_deref() == Some(Path::new("$XDG_DATA_HOME/v/images/web.ext4")))
         );
     }
 

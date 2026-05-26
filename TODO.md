@@ -14,14 +14,14 @@
 - [x] Add volume-level file locks.
 - [x] Prevent concurrent deploys for the same app.
 - [x] Add worker configuration for SSH targets.
-- [ ] Separate Mac controller state from Linux worker paths.
-- [ ] Treat kernel, rootfs, volume, runtime, and API socket paths as worker-side paths.
+- [x] Separate Mac controller state from Linux worker paths.
+- [x] Treat kernel, rootfs, runtime, and API socket paths as worker-side paths.
 
 ## Phase 1: Remote Worker Foundation
 
 - [x] Add `--worker` selection or default worker config.
 - [x] Add SSH command runner.
-- [ ] Add remote file/path validation helpers.
+- [x] Add remote file/path validation helpers.
 - [x] Add worker capability checks for Linux, KVM, Firecracker, networking, and permissions.
 - [x] Add remote runtime path conventions.
 - [x] Add remote runtime directory creation.

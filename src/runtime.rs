@@ -21,6 +21,7 @@ impl RuntimeLayout {
         Self { app, app_dir }
     }
 
+    #[allow(dead_code)]
     pub fn app(&self) -> &str {
         &self.app
     }
@@ -89,6 +90,7 @@ impl RuntimeState {
         }
     }
 
+    #[allow(dead_code)]
     pub fn for_layout(layout: &RuntimeLayout) -> Self {
         Self::new(layout.app().to_owned(), layout.api_socket_path())
     }

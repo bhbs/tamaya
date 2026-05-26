@@ -106,7 +106,9 @@ fn run_prepares_runtime_state_and_boot_requests() {
     let state =
         fs::read_to_string(project.join("runtime/v/web/state.toml")).expect("read runtime state");
     assert!(state.contains("app = \"web\""));
-    assert!(state.contains("api_socket = "));
+    assert!(state.contains(
+        "api_socket = \"${XDG_RUNTIME_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/v/runtime}/v/web/firecracker.sock\""
+    ));
     assert!(state.contains("status = \"starting\""));
     assert!(project.join("runtime/v/web/logs").is_dir());
 
@@ -145,6 +147,71 @@ fn run_without_dry_run_reports_remote_worker_gap() {
     assert!(ssh_log.contains("XDG_RUNTIME_DIR"));
     assert!(ssh_log.contains("log_dir=\"$runtime_dir/logs\""));
     assert!(ssh_log.contains("mkdir -p \"$data_root/images\" \"$data_root/volumes\""));
+    assert!(ssh_log.contains("kernel"));
+    assert!(ssh_log.contains("rootfs"));
+    assert!(ssh_log.contains("[ -f \"$resolved\" ]"));
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
+#[test]
+fn check_validates_worker_without_remote_files() {
+    let project = initialized_project("check");
+    add_worker_config(&project);
+    let fake_ssh = fake_ssh_bin(&project);
+    let fake_ssh_log = project.join("fake-ssh.log");
+
+    let output = v_command(&project)
+        .env("V_SSH_BIN", &fake_ssh)
+        .env("V_FAKE_SSH_LOG", &fake_ssh_log)
+        .args(["check", "web", "--worker", "vps-prod"])
+        .output()
+        .expect("check worker");
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = stdout(&output);
+    assert!(stdout.contains("worker: vps-prod (deploy@203.0.113.10)"));
+    assert!(stdout.contains("remote runtime:"));
+    assert!(stdout.contains("api socket:"));
+    assert!(stdout.contains("ok"));
+    let ssh_log = fs::read_to_string(fake_ssh_log).expect("read fake ssh log");
+    assert!(ssh_log.contains("uname -s"));
+    assert!(!ssh_log.contains("name='\"'\"'kernel'\"'\"'"));
+    assert!(!ssh_log.contains("name='\"'\"'rootfs'\"'\"'"));
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
+#[test]
+fn check_optionally_validates_remote_files() {
+    let project = initialized_project("check-files");
+    add_worker_config(&project);
+    let fake_ssh = fake_ssh_bin(&project);
+    let fake_ssh_log = project.join("fake-ssh.log");
+
+    let output = v_command(&project)
+        .env("V_SSH_BIN", &fake_ssh)
+        .env("V_FAKE_SSH_LOG", &fake_ssh_log)
+        .args([
+            "check",
+            "web",
+            "--worker",
+            "vps-prod",
+            "--kernel",
+            "/kernels/vmlinux",
+            "--rootfs",
+            "$XDG_DATA_HOME/v/images/web.ext4",
+        ])
+        .output()
+        .expect("check worker files");
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = stdout(&output);
+    assert!(stdout.contains("kernel:"));
+    assert!(stdout.contains("rootfs:"));
+    let ssh_log = fs::read_to_string(fake_ssh_log).expect("read fake ssh log");
+    assert!(ssh_log.contains("name='\"'\"'kernel'\"'\"'"));
+    assert!(ssh_log.contains("name='\"'\"'rootfs'\"'\"'"));
 
     fs::remove_dir_all(project).expect("remove temp project");
 }

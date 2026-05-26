@@ -40,6 +40,17 @@ fn main() -> Result<()> {
             memory_mib,
             dry_run,
         }),
+        Command::Check {
+            app,
+            worker,
+            kernel,
+            rootfs,
+        } => app::check(app::CheckOptions {
+            app,
+            worker,
+            kernel,
+            rootfs,
+        }),
         Command::Ps => app::ps(),
         Command::Deploy { app } => app::deploy(&app),
         Command::Rollback { app } => app::rollback(&app),
