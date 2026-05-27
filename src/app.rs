@@ -189,19 +189,19 @@ fn boot_vm_on_worker(
         .with_status_message("boot plan prepared");
     state.save(&layout.state_file_path())?;
 
-    println!("runtime: {}", layout.app_dir().display());
-    println!("worker: {worker_name} ({})", worker.ssh_target());
-    println!("remote runtime: {remote_runtime}");
-    println!("api socket: {}", client.api_socket_path().display());
-    println!("kernel: {}", plan.boot_source.kernel_image_path.display());
-    println!("rootfs: {}", plan.rootfs.path_on_host.display());
+    log::info!("runtime: {}", layout.app_dir().display());
+    log::info!("worker: {worker_name} ({})", worker.ssh_target());
+    log::info!("remote runtime: {remote_runtime}");
+    log::info!("api socket: {}", client.api_socket_path().display());
+    log::info!("kernel: {}", plan.boot_source.kernel_image_path.display());
+    log::info!("rootfs: {}", plan.rootfs.path_on_host.display());
     if let Some(data_drive) = &plan.data_drive {
-        println!("data: {}", data_drive.path_on_host.display());
+        log::info!("data: {}", data_drive.path_on_host.display());
     }
     for request in &requests {
-        println!("{} {}", request.method, request.path);
+        log::info!("{} {}", request.method, request.path);
     }
-    println!("{} {}", start_request.method, start_request.path);
+    log::info!("{} {}", start_request.method, start_request.path);
 
     let remote_log_dir = Path::new(&remote_runtime).join("logs");
     let runner = SshRunner::new(worker.clone());
@@ -235,7 +235,7 @@ fn boot_vm_on_worker(
         .with_status_message("booted")
         .save(&layout.state_file_path())?;
 
-    println!("pid: {pid}");
+    log::info!("pid: {pid}");
 
     Ok(VmBootContext {
         pid,
@@ -251,7 +251,7 @@ pub fn init() -> Result<()> {
     let registry = Registry::load(&config.registry_file)?;
     registry.save(&config.registry_file)?;
 
-    println!("initialized {}", config.registry_file.display());
+    log::info!("initialized {}", config.registry_file.display());
 
     Ok(())
 }
@@ -261,15 +261,13 @@ pub fn setup(options: SetupOptions) -> Result<()> {
     let (worker_name, worker) = config.worker(options.worker.as_deref())?;
     let runner = SshRunner::new(worker.clone());
 
-    println!("v setup: worker {worker_name} ({})", worker.ssh_target());
-    println!();
+    log::info!("v setup: worker {worker_name} ({})", worker.ssh_target());
 
-    println!("  worker prerequisites: installing...");
+    log::info!("  worker prerequisites: installing...");
     runner.install_worker_prerequisites()?;
-    println!("  worker prerequisites: installed");
+    log::info!("  worker prerequisites: installed");
 
-    println!();
-    println!("ok");
+    log::info!("ok");
 
     Ok(())
 }
@@ -279,25 +277,25 @@ pub fn cleanup(options: CleanupOptions) -> Result<()> {
     let (worker_name, worker) = config.worker(options.worker.as_deref())?;
     let runner = SshRunner::new(worker.clone());
 
-    println!("cleanup: worker {worker_name} ({})", worker.ssh_target());
+    log::info!("cleanup: worker {worker_name} ({})", worker.ssh_target());
 
     if options.stale_taps {
         let preserve_taps = runtime_taps_for_worker(&config, worker_name)?;
         let removed = runner.cleanup_stale_tap_interfaces(&preserve_taps)?;
         if removed.is_empty() {
-            println!("cleanup: no stale TAP interfaces found");
+            log::info!("cleanup: no stale TAP interfaces found");
         } else {
             for tap in &removed {
-                println!("cleanup: removed TAP {tap}");
+                log::info!("cleanup: removed TAP {tap}");
             }
-            println!(
+            log::info!(
                 "cleanup: removed {} stale TAP interface{}",
                 removed.len(),
                 if removed.len() == 1 { "" } else { "s" }
             );
         }
     } else {
-        println!("cleanup: nothing selected");
+        log::warn!("cleanup: nothing selected");
     }
 
     Ok(())
@@ -324,7 +322,7 @@ pub fn ps() -> Result<()> {
     let mut cleaned = 0u32;
 
     if registry.apps.is_empty() && runtime_entries.is_empty() {
-        println!("no apps");
+        log::info!("no apps");
         return Ok(());
     }
 
@@ -357,7 +355,7 @@ pub fn ps() -> Result<()> {
     }
 
     if cleaned > 0 {
-        println!(
+        log::warn!(
             "cleaned up {cleaned} stale runtime entr{}",
             if cleaned == 1 { "y" } else { "ies" }
         );
@@ -410,31 +408,31 @@ pub fn check(options: CheckOptions) -> Result<()> {
     };
 
     match runner.check_caddy() {
-        Ok(_) => println!("caddy: installed and running"),
+        Ok(_) => log::info!("caddy: installed and running"),
         Err(_) => {
-            println!("caddy: not found or not running on worker");
-            println!("  run: v setup --worker {worker_name}");
+            log::warn!("caddy: not found or not running on worker");
+            log::info!("  run: v setup --worker {worker_name}");
         }
     }
 
-    println!("worker: {worker_name} ({})", worker.ssh_target());
+    log::info!("worker: {worker_name} ({})", worker.ssh_target());
     if let Some(remote_runtime) = &remote_runtime {
-        println!("remote runtime: {remote_runtime}");
-        println!(
+        log::info!("remote runtime: {remote_runtime}");
+        log::info!(
             "api socket: {}",
             Path::new(remote_runtime).join("firecracker.sock").display()
         );
     }
     if let Some(kernel) = kernel {
-        println!("kernel: {kernel}");
+        log::info!("kernel: {kernel}");
     }
     if let Some(rootfs) = rootfs {
-        println!("rootfs: {rootfs}");
+        log::info!("rootfs: {rootfs}");
     }
     if let Some(tap) = tap {
-        println!("tap: {tap}");
+        log::info!("tap: {tap}");
     }
-    println!("ok");
+    log::info!("ok");
 
     Ok(())
 }
@@ -540,7 +538,7 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
         if deploy_layout.state_file_path().exists() {
             bail!("{app}: deploy is already in progress");
         }
-        println!("deploy: previous deploy was interrupted; resetting status and retrying");
+        log::warn!("deploy: previous deploy was interrupted; resetting status and retrying");
         let recovered_status = RuntimeState::load(&old_layout.state_file_path())
             .ok()
             .and_then(|state| match state.status {
@@ -571,36 +569,36 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
 
     if options.dry_run {
         deploy_layout.remove()?;
-        println!("deploy: dry-run for {app}");
+        log::info!("deploy: dry-run for {app}");
         if let Some(rootfs) = &options.rootfs {
-            println!("  new rootfs: {}", rootfs.display());
+            log::info!("  new rootfs: {}", rootfs.display());
         }
         if let Some(artifact) = &options.artifact {
-            println!("  artifact: {}", artifact.display());
-            println!("  would upload artifact to worker");
-            println!(
+            log::info!("  artifact: {}", artifact.display());
+            log::info!("  would upload artifact to worker");
+            log::info!(
                 "  would materialize rootfs.ext4 on worker ({} MiB)",
                 options.rootfs_size_mib
             );
-            println!(
+            log::info!(
                 "  would ensure data.ext4 on worker ({} MiB)",
                 options.data_size_mib
             );
         }
         if let Some(data) = &options.data {
-            println!("  data: {}", data.display());
+            log::info!("  data: {}", data.display());
         }
-        println!("  kernel: {}", options.kernel.display());
-        println!("  tap: {}", options.tap);
-        println!("  vcpu: {}", options.vcpu);
-        println!("  memory_mib: {}", options.memory_mib);
-        println!("  health check host: {}", options.health_check_host);
+        log::info!("  kernel: {}", options.kernel.display());
+        log::info!("  tap: {}", options.tap);
+        log::info!("  vcpu: {}", options.vcpu);
+        log::info!("  memory_mib: {}", options.memory_mib);
+        log::info!("  health check host: {}", options.health_check_host);
         if let Some(ref domain) = options.domain {
             let proxy_target = format!("{}:{}", options.health_check_host, old_port);
-            println!("  would update reverse proxy: {domain} → {proxy_target}");
-            println!("  would reload Caddy");
+            log::info!("  would update reverse proxy: {domain} → {proxy_target}");
+            log::info!("  would reload Caddy");
         } else {
-            println!("  (no --domain set; proxy routing is manual)");
+            log::info!("  (no --domain set; proxy routing is manual)");
         }
         return Ok(());
     }
@@ -613,12 +611,19 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
         config.registry_file.clone(),
     );
 
+    log::info!("deploy: starting deploy for {app}");
+
     let (worker_name, worker) =
         resolve_worker(&config, options.worker.as_deref(), options.dry_run)?
             .context("worker is required for deploy")?;
     cleanup.set_worker(worker.clone());
+    log::info!(
+        "deploy: resolved worker {worker_name} ({})",
+        worker.ssh_target()
+    );
 
     // Mark deploying — Drop guard reverts this on failure
+    log::info!("deploy: marking registry status as deploying");
     registry.apps.insert(
         app.to_string(),
         crate::registry::App {
@@ -651,13 +656,14 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
 
     let mut materialized_data: Option<PathBuf> = None;
     let rootfs = if let Some(rootfs) = &options.rootfs {
+        log::info!("deploy: using provided rootfs {}", rootfs.display());
         rootfs.clone()
     } else {
         let artifact = options
             .artifact
             .as_ref()
             .context("artifact is required when rootfs is not set")?;
-        println!("deploy: uploading artifact for {app}");
+        log::info!("deploy: uploading artifact for {app}");
         let runner = SshRunner::new(worker.clone());
         let remote_artifact = if artifact.is_file() {
             runner
@@ -676,7 +682,7 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
                 artifact.display()
             );
         };
-        println!("deploy: materializing rootfs.ext4 and data.ext4 on worker");
+        log::info!("deploy: materializing rootfs.ext4 and data.ext4 on worker");
         let artifact = runner.materialize_rootfs_from_artifact(
             app,
             Path::new(&remote_artifact),
@@ -685,14 +691,14 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
             old_port,
             "/sbin/init",
         )?;
-        println!("deploy: worker rootfs {}", artifact.rootfs.display());
-        println!("deploy: worker data {}", artifact.data.display());
+        log::info!("deploy: worker rootfs {}", artifact.rootfs.display());
+        log::info!("deploy: worker data {}", artifact.data.display());
         materialized_data = Some(artifact.data);
         artifact.rootfs
     };
     let data = options.data.clone().or(materialized_data);
 
-    println!("deploy: booting new VM for {app}");
+    log::info!("deploy: booting new VM for {app}");
 
     let params = VmBootParams {
         kernel: &options.kernel,
@@ -707,20 +713,18 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
     let ctx = boot_vm_on_worker(&deploy_app, worker, &worker_name, &params, &deploy_layout)?;
     cleanup.booted(ctx.clone());
 
-    println!("deploy: new VM booted (pid: {})", ctx.pid);
+    log::info!("deploy: new VM booted (pid: {})", ctx.pid);
 
     // Health checks
-    println!(
-        "deploy: running health checks against {}:{}...",
-        options.health_check_host, old_port
-    );
+    log::info!("deploy: starting health checks");
     let mut health_ok = options.skip_health_check;
     if health_ok {
-        println!("deploy: health check skipped (--skip-health-check)");
+        log::info!("deploy: health check skipped (--skip-health-check)");
     } else {
-        println!(
+        log::info!(
             "deploy: running health checks against {}:{}...",
-            options.health_check_host, old_port
+            options.health_check_host,
+            old_port
         );
         for i in 0..options.health_check_retries {
             if i > 0 {
@@ -736,7 +740,7 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
             };
             match result {
                 Ok(()) => {
-                    println!(
+                    log::info!(
                         "deploy: health check passed (attempt {}/{})",
                         i + 1,
                         options.health_check_retries
@@ -745,49 +749,58 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
                     break;
                 }
                 Err(_) if i + 1 == options.health_check_retries => {}
-                Err(_) => {}
+                Err(_) => {
+                    log::warn!(
+                        "deploy: health check attempt {}/{} failed",
+                        i + 1,
+                        options.health_check_retries
+                    );
+                }
             }
         }
     }
     if !health_ok {
-        println!("deploy: health check failed; remote VM logs follow");
+        log::error!("deploy: health check failed; remote VM logs follow");
         let runner = SshRunner::new(worker.clone());
         if let Err(e) = runner.stream_logs(&ctx.remote_runtime_dir.join("logs")) {
-            println!("deploy: failed to read remote VM logs: {e:#}");
+            log::error!("deploy: failed to read remote VM logs: {e:#}");
         }
         bail!(
             "deploy: health check failed after {} retries",
             options.health_check_retries
         );
     }
+    log::info!("deploy: health checks completed");
 
     // New VM confirmed healthy — keep it even if later steps fail
     cleanup.disarm();
+    log::info!("deploy: new VM confirmed healthy, disarming cleanup guard");
 
     // Switch traffic
-    println!("deploy: switching traffic for {app}");
+    log::info!("deploy: switching traffic for {app}");
 
     let runner = SshRunner::new(worker.clone());
     if let Some(domain) = options.domain.as_ref() {
         let proxy_target = format!("{}:{}", options.health_check_host, old_port);
-        println!("deploy: updating reverse proxy {domain} → {proxy_target}");
+        log::info!("deploy: updating reverse proxy {domain} → {proxy_target}");
         if let Err(e) =
             runner.update_caddy_config(app, domain, &options.health_check_host, old_port)
         {
-            println!("deploy: failed to update Caddy config: {e:#}");
+            log::error!("deploy: failed to update Caddy config: {e:#}");
         } else if let Err(e) = runner.reload_caddy() {
-            println!("deploy: failed to reload Caddy: {e:#}");
+            log::error!("deploy: failed to reload Caddy: {e:#}");
         } else {
-            println!("deploy: Caddy reloaded");
+            log::info!("deploy: Caddy reloaded");
         }
     } else {
-        println!("deploy: update your reverse proxy to route traffic for {app} to the new VM");
-        println!("deploy: reload your proxy (e.g. `systemctl reload caddy`)");
+        log::info!("deploy: update your reverse proxy to route traffic for {app} to the new VM");
+        log::info!("deploy: reload your proxy (e.g. `systemctl reload caddy`)");
     }
+    log::info!("deploy: traffic switch completed");
 
     // Drain old VM
     if has_old_vm {
-        println!(
+        log::info!(
             "deploy: draining old VM for {} seconds...",
             options.drain_seconds
         );
@@ -799,7 +812,7 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
             && let Some(ref old_worker_name) = old_state.worker
             && let Ok((_, old_worker)) = config.worker(Some(old_worker_name))
         {
-            println!("deploy: stopping old VM for {app} (pid: {pid})");
+            log::info!("deploy: stopping old VM for {app} (pid: {pid})");
             let old_runner = SshRunner::new(old_worker.clone());
             old_runner
                 .stop_firecracker(pid, remote_runtime_dir)
@@ -811,9 +824,11 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
         let old_runner = SshRunner::new(worker.clone());
         let _ = old_runner.delete_tap_interface(&options.tap);
     }
+    log::info!("deploy: drain completed");
 
     // Rename remote runtime: {app}-deploy → {app}
     // Must happen AFTER old VM is stopped so the destination directory is free.
+    log::info!("deploy: renaming remote runtime {deploy_app} → {app}");
     let deploy_remote_dir = ctx.remote_runtime_dir.clone();
     let remote_name_pattern = format!("/{deploy_app}");
     let primary_remote_dir = deploy_remote_dir
@@ -823,7 +838,7 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
             let runner = SshRunner::new(worker.clone());
             match runner.rename_runtime_dir(&deploy_remote_dir, &new_dir) {
                 Ok(_) => {
-                    println!(
+                    log::info!(
                         "deploy: renamed remote runtime {} → {}",
                         deploy_remote_dir.display(),
                         new_dir.display()
@@ -831,7 +846,7 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
                     Some(new_dir)
                 }
                 Err(e) => {
-                    println!(
+                    log::error!(
                         "deploy: could not rename remote runtime (keeping {}): {e:#}",
                         deploy_remote_dir.display()
                     );
@@ -842,6 +857,7 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
         .unwrap_or_else(|| deploy_remote_dir.clone());
 
     // Swap runtime state: {app}-deploy → {app}
+    log::info!("deploy: swapping runtime state {deploy_app} → {app}");
     let deploy_state = RuntimeState::load(&deploy_layout.state_file_path())?;
     let new_layout = RuntimeLayout::from_runtime_dir(&config.runtime_dir, app);
     old_layout.remove()?;
@@ -861,8 +877,10 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
         .with_status_message("deployed")
         .save(&new_layout.state_file_path())?;
     deploy_layout.remove()?;
+    log::info!("deploy: runtime state swapped");
 
     // Commit registry
+    log::info!("deploy: committing registry");
     let old_current = registry
         .apps
         .get(app)
@@ -876,8 +894,9 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
         entry.status = AppStatus::Running;
     });
     registry.save(&config.registry_file)?;
+    log::info!("deploy: registry committed");
 
-    println!("deploy: {app} deployed successfully");
+    log::info!("deploy: {app} deployed successfully");
 
     Ok(())
 }
@@ -895,18 +914,18 @@ pub fn unlock(app: &str) -> Result<()> {
     for path in [&app_lock_path, &volume_lock_path] {
         match fs::remove_file(path) {
             Ok(()) => {
-                println!("unlock: removed {}", path.display());
+                log::info!("unlock: removed {}", path.display());
                 removed = true;
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => {
-                println!("unlock: failed to remove {}: {e}", path.display());
+                log::warn!("unlock: failed to remove {}: {e}", path.display());
             }
         }
     }
 
     if !removed {
-        println!("unlock: no lock files found for {app}");
+        log::info!("unlock: no lock files found for {app}");
     }
 
     Ok(())
@@ -916,7 +935,7 @@ pub fn rollback(app: &str) -> Result<()> {
     let config = load_config()?;
     let _app_lock = LockFile::acquire(&config.locks_dir, &app_lock_name(app))?;
 
-    println!("rollback: rolling back {app} is not implemented yet");
+    log::info!("rollback: rolling back {app} is not implemented yet");
 
     Ok(())
 }
@@ -929,7 +948,7 @@ pub fn stop(app: &str) -> Result<()> {
     let state = match RuntimeState::load(&layout.state_file_path()) {
         Ok(state) => state,
         Err(error) if is_not_found_error(&error) => {
-            println!("stop: {app} is not running");
+            log::info!("stop: {app} is not running");
             return Ok(());
         }
         Err(error) => return Err(error),
@@ -954,8 +973,8 @@ pub fn stop(app: &str) -> Result<()> {
     layout.remove()?;
 
     match stopped_pid {
-        Some(pid) => println!("stop: stopped {app} pid {pid}"),
-        None => println!("stop: stopped {app}"),
+        Some(pid) => log::info!("stop: stopped {app} pid {pid}"),
+        None => log::info!("stop: stopped {app}"),
     }
 
     if let Some(ref worker) = worker_for_proxy {
@@ -974,7 +993,7 @@ pub fn logs(app: &str) -> Result<()> {
     let state = match RuntimeState::load(&layout.state_file_path()) {
         Ok(state) => state,
         Err(error) if is_not_found_error(&error) => {
-            println!("logs: {app} is not running");
+            log::info!("logs: {app} is not running");
             return Ok(());
         }
         Err(error) => return Err(error),
@@ -1003,7 +1022,7 @@ pub fn logs(app: &str) -> Result<()> {
                 }
             }
         } else {
-            println!("logs: no logs found for {app}");
+            log::info!("logs: no logs found for {app}");
         }
     }
 

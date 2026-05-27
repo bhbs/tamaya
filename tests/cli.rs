@@ -28,7 +28,7 @@ fn ps_reports_empty_registry() {
     let output = v_command(&project).arg("ps").output().expect("run ps");
 
     assert!(output.status.success());
-    assert_eq!(stdout(&output), "no apps\n");
+    assert!(stdout(&output).contains("no apps"));
 
     fs::remove_dir_all(project).expect("remove temp project");
 }
@@ -177,7 +177,7 @@ status_message = "booted"
         .expect("stop app");
 
     assert!(stop.status.success(), "{stop:?}");
-    assert_eq!(stdout(&stop), "stop: stopped web pid 4242\n");
+    assert!(stdout(&stop).contains("stop: stopped web pid 4242"));
     assert!(!runtime_dir.exists());
 
     let ssh_log = fs::read_to_string(fake_ssh_log).expect("read fake ssh log");
@@ -236,7 +236,7 @@ fn logs_reports_when_app_not_running() {
         .expect("run logs");
 
     assert!(output.status.success(), "{output:?}");
-    assert_eq!(stdout(&output), "logs: web is not running\n");
+    assert!(stdout(&output).contains("logs: web is not running"));
 
     fs::remove_dir_all(project).expect("remove temp project");
 }

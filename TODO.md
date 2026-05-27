@@ -8,13 +8,7 @@
 - [x] Phase 3: VM lifecycle (ps / stop / logs)
 - [x] Phase 4: Blue-green deploy with health check + Caddy proxy switch + drain
 - [x] Phase 5: Image build (Docker export → tar artifact)
-
-## Phase 6: Logging
-
-- [ ] Unify log output format across all commands (consistent prefix, timestamp, level)
-- [ ] Distinguish info / warn / error output levels
-- [ ] Surface which worker / step failed when an SSH operation errors
-- [ ] Log start and completion of each deploy step explicitly
+- [x] Phase 6: Logging (unified format with timestamps/levels, deploy step logging, worker-aware SSH errors)
 
 ## Phase 7: TAP Management
 

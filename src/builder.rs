@@ -60,7 +60,7 @@ pub fn build(options: BuildOptions) -> Result<()> {
 
     print_plan(&options, &layout, &image_tag);
     if options.dry_run {
-        println!("build: dry-run; no Docker or filesystem commands were run");
+        log::info!("build: dry-run; no Docker or filesystem commands were run");
         return Ok(());
     }
 
@@ -141,9 +141,9 @@ pub fn build(options: BuildOptions) -> Result<()> {
     );
     registry.save(&config.registry_file)?;
 
-    println!("build: wrote {}", layout.artifact.display());
-    println!("build: wrote {}", layout.config.display());
-    println!("build: wrote {}", layout.metadata.display());
+    log::info!("build: wrote {}", layout.artifact.display());
+    log::info!("build: wrote {}", layout.config.display());
+    log::info!("build: wrote {}", layout.metadata.display());
 
     Ok(())
 }
@@ -254,17 +254,17 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 }
 
 fn print_plan(options: &BuildOptions, layout: &BuildLayout, image_tag: &str) {
-    println!("build: {}", options.app);
-    println!("  app dir: {}", layout.app_dir.display());
-    println!("  docker context: {}", options.context.display());
-    println!("  dockerfile: {}", options.dockerfile.display());
-    println!("  image tag: {image_tag}");
-    println!("  platform: {DOCKER_PLATFORM}");
-    println!("  artifact: {}", layout.artifact.display());
-    println!("  config: {}", layout.config.display());
-    println!("  metadata: {}", layout.metadata.display());
-    println!("  port: {APP_PORT}");
-    println!("  init: {INIT_PATH}");
+    log::info!("build: {}", options.app);
+    log::info!("  app dir: {}", layout.app_dir.display());
+    log::info!("  docker context: {}", options.context.display());
+    log::info!("  dockerfile: {}", options.dockerfile.display());
+    log::info!("  image tag: {image_tag}");
+    log::info!("  platform: {DOCKER_PLATFORM}");
+    log::info!("  artifact: {}", layout.artifact.display());
+    log::info!("  config: {}", layout.config.display());
+    log::info!("  metadata: {}", layout.metadata.display());
+    log::info!("  port: {APP_PORT}");
+    log::info!("  init: {INIT_PATH}");
 }
 
 fn now_unix_secs() -> u64 {

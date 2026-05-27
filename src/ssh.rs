@@ -54,17 +54,18 @@ impl SshRunner {
     }
 
     pub fn run_shell(&self, script: &str) -> Result<Output> {
-        let output = self
-            .shell_command(script)
-            .output()
-            .context("failed to run ssh command")?;
+        let output = self.shell_command(script).output().context(format!(
+            "failed to run ssh command on worker {}",
+            self.worker.ssh_target()
+        ))?;
 
         if output.status.success() {
             return Ok(output);
         }
 
         bail!(
-            "ssh command failed with status {}: {}",
+            "ssh command failed on worker {} with status {}: {}",
+            self.worker.ssh_target(),
             output.status,
             String::from_utf8_lossy(&output.stderr).trim()
         );
@@ -72,7 +73,10 @@ impl SshRunner {
 
     pub fn check_capabilities(&self) -> Result<()> {
         self.run_shell(&worker_capability_script(&self.worker))
-            .context("worker capability check failed")?;
+            .context(format!(
+                "worker capability check failed on worker {}",
+                self.worker.ssh_target()
+            ))?;
         Ok(())
     }
 
@@ -138,7 +142,8 @@ impl SshRunner {
             .context("failed to wait for ssh upload command")?;
         if !output.status.success() {
             bail!(
-                "ssh upload failed with status {}: {}",
+                "ssh upload failed on worker {} with status {}: {}",
+                self.worker.ssh_target(),
                 output.status,
                 String::from_utf8_lossy(&output.stderr).trim()
             );
@@ -178,7 +183,8 @@ impl SshRunner {
             .context("failed to wait for ssh artifact upload command")?;
         if !output.status.success() {
             bail!(
-                "ssh artifact upload failed with status {}: {}",
+                "ssh artifact upload failed on worker {} with status {}: {}",
+                self.worker.ssh_target(),
                 output.status,
                 String::from_utf8_lossy(&output.stderr).trim()
             );
@@ -376,12 +382,16 @@ impl SshRunner {
     }
 
     pub fn stream_shell(&self, script: &str) -> Result<()> {
-        let status = self
-            .shell_command(script)
-            .status()
-            .context("failed to run ssh stream command")?;
+        let status = self.shell_command(script).status().context(format!(
+            "failed to run ssh stream command on worker {}",
+            self.worker.ssh_target()
+        ))?;
         if !status.success() {
-            bail!("ssh stream command failed with status {}", status);
+            bail!(
+                "ssh stream command failed on worker {} with status {}",
+                self.worker.ssh_target(),
+                status
+            );
         }
         Ok(())
     }

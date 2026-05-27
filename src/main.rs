@@ -4,6 +4,7 @@ mod cli;
 mod config;
 mod firecracker;
 mod lock;
+mod log;
 mod registry;
 mod runtime;
 mod ssh;
@@ -13,6 +14,7 @@ use clap::Parser;
 use cli::{Cli, Command};
 
 fn main() -> Result<()> {
+    log::init();
     let cli = Cli::parse();
 
     match cli.command {
