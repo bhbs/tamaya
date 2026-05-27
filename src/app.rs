@@ -83,6 +83,7 @@ struct DeployCleanup {
     old_registry_status: AppStatus,
     registry_file: PathBuf,
     app: String,
+    deploy_app: String,
 }
 
 impl DeployCleanup {
@@ -92,6 +93,7 @@ impl DeployCleanup {
         old_registry_status: AppStatus,
         registry_file: PathBuf,
     ) -> Self {
+        let deploy_app = format!("{app}-deploy");
         Self {
             deploy_layout: Some(deploy_layout),
             worker: None,
@@ -100,6 +102,7 @@ impl DeployCleanup {
             old_registry_status,
             registry_file,
             app,
+            deploy_app,
         }
     }
 
@@ -129,11 +132,16 @@ impl Drop for DeployCleanup {
             if let Some(ctx) = self.ctx.take() {
                 let runner = SshRunner::new(worker.clone());
                 let _ = runner.stop_firecracker(ctx.pid, &ctx.remote_runtime_dir);
-            }
-            if let Some(tap) = self.deploy_tap.take() {
+            } else {
                 let runner = SshRunner::new(worker);
-                let _ = runner.delete_tap_interface(&tap);
+                let _ = runner.remove_remote_runtime_for_app(&self.deploy_app);
             }
+        }
+        if let Some(worker) = self.worker.take()
+            && let Some(tap) = self.deploy_tap.take()
+        {
+            let runner = SshRunner::new(worker);
+            let _ = runner.delete_tap_interface(&tap);
         }
         if let Some(layout) = self.deploy_layout.take() {
             let _ = layout.remove();
@@ -540,16 +548,13 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
         bail!("data-size-mib must be greater than zero");
     }
 
-    let app_lock =
-        LockFile::acquire(&config.locks_dir, &app_lock_name(app))
-            .with_context(|| format!("lock acquisition failed; try: v unlock {app}"))?;
+    let app_lock = LockFile::acquire(&config.locks_dir, &app_lock_name(app))
+        .with_context(|| format!("lock acquisition failed; try: v unlock {app}"))?;
     let volume_lock = match LockFile::acquire(&config.locks_dir, &volume_lock_name(app)) {
         Ok(lock) => lock,
         Err(e) => {
             drop(app_lock);
-            return Err(e).with_context(|| {
-                format!("lock acquisition failed; try: v unlock {app}")
-            });
+            return Err(e).with_context(|| format!("lock acquisition failed; try: v unlock {app}"));
         }
     };
     let _app_lock = app_lock;
@@ -571,7 +576,37 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
         let deploy_layout =
             RuntimeLayout::from_runtime_dir(&config.runtime_dir, format!("{app}-deploy"));
         if deploy_layout.state_file_path().exists() {
-            bail!("{app}: deploy is already in progress");
+            let deploy_state = RuntimeState::load(&deploy_layout.state_file_path()).ok();
+            let deploy_is_stale = deploy_state
+                .as_ref()
+                .map(|state| {
+                    state.status == RuntimeStatus::Stopped
+                        || state.pid.is_none()
+                        || state.worker.is_none()
+                })
+                .unwrap_or(true);
+            if deploy_is_stale {
+                log::warn!(
+                    "deploy: previous deploy was interrupted; cleaning up stale deploy resources"
+                );
+                if let Some(ref deploy_state) = deploy_state
+                    && let Some(ref worker_name) = deploy_state.worker
+                    && let Ok((_, worker)) = config.worker(Some(worker_name))
+                {
+                    let runner = SshRunner::new(worker.clone());
+                    if let Some(ref remote_runtime_dir) = deploy_state.remote_runtime_dir {
+                        let _ = runner.remove_remote_runtime_dir(Path::new(remote_runtime_dir));
+                    } else {
+                        let _ = runner.remove_remote_runtime_for_app(&format!("{app}-deploy"));
+                    }
+                    if let Some(ref tap) = deploy_state.tap {
+                        let _ = runner.delete_tap_interface(tap);
+                    }
+                }
+                let _ = deploy_layout.remove();
+            } else {
+                bail!("{app}: deploy is already in progress");
+            }
         }
         log::warn!("deploy: previous deploy was interrupted; resetting status and retrying");
         let recovered_status = RuntimeState::load(&old_layout.state_file_path())

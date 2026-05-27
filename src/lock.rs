@@ -32,7 +32,11 @@ impl LockInfo {
     pub fn display_age(&self) -> String {
         match self.age() {
             Some(age) if age.as_secs() >= 3600 => {
-                format!("{}h {}m ago", age.as_secs() / 3600, (age.as_secs() % 3600) / 60)
+                format!(
+                    "{}h {}m ago",
+                    age.as_secs() / 3600,
+                    (age.as_secs() % 3600) / 60
+                )
             }
             Some(age) if age.as_secs() >= 60 => {
                 format!("{}m {}s ago", age.as_secs() / 60, age.as_secs() % 60)
@@ -121,10 +125,7 @@ pub fn read_lock_info(path: &Path) -> LockInfo {
         Err(_) => (None, None),
     };
 
-    LockInfo {
-        pid,
-        timestamp,
-    }
+    LockInfo { pid, timestamp }
 }
 
 pub fn app_lock_name(app: &str) -> String {
@@ -156,10 +157,12 @@ mod tests {
         let second = LockFile::acquire(&dir, name);
 
         assert!(second.is_err());
-        assert!(second
-            .unwrap_err()
-            .to_string()
-            .contains("lock already held"));
+        assert!(
+            second
+                .unwrap_err()
+                .to_string()
+                .contains("lock already held")
+        );
 
         drop(lock);
         fs::remove_dir_all(dir).expect("remove temp dir");
@@ -276,7 +279,10 @@ mod tests {
         fs::create_dir_all(&dir).expect("create dir");
         fs::write(
             &path,
-            format!("pid=777\ntimestamp={}\n", now_unix_secs() - STALE_LOCK_SECS - 30),
+            format!(
+                "pid=777\ntimestamp={}\n",
+                now_unix_secs() - STALE_LOCK_SECS - 30
+            ),
         )
         .expect("write old lock");
 

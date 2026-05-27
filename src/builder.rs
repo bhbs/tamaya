@@ -71,10 +71,7 @@ pub fn build(options: BuildOptions) -> Result<()> {
         Err(e) => {
             drop(app_lock);
             return Err(e).with_context(|| {
-                format!(
-                    "lock acquisition failed; try: v unlock {}",
-                    options.app
-                )
+                format!("lock acquisition failed; try: v unlock {}", options.app)
             });
         }
     };

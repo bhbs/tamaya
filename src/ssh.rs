@@ -357,6 +357,22 @@ impl SshRunner {
         Ok(())
     }
 
+    pub fn remove_remote_runtime_dir(&self, remote_runtime_dir: &Path) -> Result<()> {
+        let remote_runtime_dir = path_to_remote_string(remote_runtime_dir)?;
+        self.run_shell(&remove_remote_runtime_dir_script(&remote_runtime_dir))
+            .context(format!(
+                "failed to remove remote runtime directory {remote_runtime_dir}"
+            ))?;
+        Ok(())
+    }
+
+    pub fn remove_remote_runtime_for_app(&self, app: &str) -> Result<()> {
+        validate_remote_name("app", app)?;
+        self.run_shell(&remove_remote_runtime_for_app_script(app))
+            .context(format!("failed to remove remote runtime for app {app}"))?;
+        Ok(())
+    }
+
     pub fn health_check(&self, host: &str, port: u16) -> Result<()> {
         validate_remote_name("health_check_host", host)?;
         self.run_shell(&health_check_script(host, port))
@@ -567,6 +583,20 @@ fn runtime_dir_renamed_script(old_path: &str, new_path: &str) -> String {
             ("old_path", shell_quote(old_path)),
             ("new_path", shell_quote(new_path)),
         ],
+    )
+}
+
+fn remove_remote_runtime_dir_script(remote_runtime_dir: &str) -> String {
+    render_ssh_script(
+        ssh_script!("remove_remote_runtime_dir.sh"),
+        &[("remote_runtime_dir", shell_quote(remote_runtime_dir))],
+    )
+}
+
+fn remove_remote_runtime_for_app_script(app: &str) -> String {
+    render_ssh_script(
+        ssh_script!("remove_remote_runtime_for_app.sh"),
+        &[("app", shell_escape_for_double_quotes(app))],
     )
 }
 
@@ -994,6 +1024,22 @@ mod tests {
 
         assert!(script.contains("[ -d \"$new\" ] && [ ! -e \"$old\" ]"));
         assert!(script.contains("runtime rename did not complete"));
+    }
+
+    #[test]
+    fn builds_remove_remote_runtime_dir_script() {
+        let script = remove_remote_runtime_dir_script("/run/v/web-deploy");
+
+        assert!(script.contains("rm -rf \"$runtime_dir\""));
+        assert!(script.contains("runtime_dir='/run/v/web-deploy'"));
+    }
+
+    #[test]
+    fn builds_remove_remote_runtime_for_app_script() {
+        let script = remove_remote_runtime_for_app_script("web-deploy");
+
+        assert!(script.contains("rm -rf \"$runtime_dir\""));
+        assert!(script.contains("web-deploy"));
     }
 
     #[test]

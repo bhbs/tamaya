@@ -569,8 +569,12 @@ status = "deploying"
     fs::write(
         project.join("runtime/v/web-deploy/state.toml"),
         r#"app = "web-deploy"
+pid = 4242
 api_socket = "/run/user/0/v/web-deploy/firecracker.sock"
-status = "starting"
+worker = "vps-prod"
+remote_runtime_dir = "/run/user/0/v/web-deploy"
+tap = "t-deadcafe0000"
+status = "running"
 "#,
     )
     .expect("write deploy runtime state");
@@ -591,6 +595,63 @@ status = "starting"
     assert!(!output.status.success(), "{output:?}");
     let stderr = String::from_utf8(output.stderr).expect("stderr is utf-8");
     assert!(stderr.contains("web: deploy is already in progress"));
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
+#[test]
+fn deploy_cleans_up_stale_deploy_runtime_and_proceeds() {
+    let project = initialized_project("deploy-stale-deploy");
+    fs::write(
+        project.join(".local/state/v/registry.toml"),
+        r#"[apps.web]
+current_image = "/images/web-v1.ext4"
+volume_path = "/volumes/web"
+port = 8080
+status = "deploying"
+"#,
+    )
+    .expect("write registry");
+    fs::create_dir_all(project.join("runtime/v/web")).expect("create runtime");
+    fs::write(
+        project.join("runtime/v/web/state.toml"),
+        r#"app = "web"
+pid = 4242
+api_socket = "/run/user/0/v/web/firecracker.sock"
+worker = "vps-prod"
+remote_runtime_dir = "/run/user/0/v/web"
+status = "running"
+"#,
+    )
+    .expect("write runtime state");
+    fs::create_dir_all(project.join("runtime/v/web-deploy")).expect("create deploy runtime");
+    fs::write(
+        project.join("runtime/v/web-deploy/state.toml"),
+        r#"app = "web-deploy"
+api_socket = "/run/user/0/v/web-deploy/firecracker.sock"
+status = "stopped"
+"#,
+    )
+    .expect("write deploy runtime state");
+
+    let output = v_command(&project)
+        .args([
+            "deploy",
+            "web",
+            "--kernel",
+            "/kernels/vmlinux",
+            "--rootfs",
+            "/images/web-v2.ext4",
+            "--dry-run",
+        ])
+        .output()
+        .expect("run deploy");
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = stdout(&output);
+    assert!(stdout.contains("cleaning up stale deploy resources"));
+    assert!(stdout.contains("deploy: dry-run for web"));
+    assert!(!project.join("runtime/v/web-deploy").exists());
 
     fs::remove_dir_all(project).expect("remove temp project");
 }

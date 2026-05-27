@@ -12,11 +12,7 @@
 - [x] Phase 7: TAP Management
 - [x] Phase 8: Runtime Directory Stability
 - [x] Phase 9: Lock Stability (PID+timestamp in lock files, stale detection, unlock shows lock info)
-
-## Phase 10: Interrupted Deploy Recovery
-
-- [ ] Strengthen auto-recovery of stale `AppStatus::Deploying` registry state
-- [ ] Have `DeployCleanup` drop-guard also clean remote TAP and runtime dir when possible
+- [x] Phase 10: Interrupted Deploy Recovery (stale Deploying auto-recovery, DeployCleanup drop-guard cleans remote TAP + runtime dir)
 
 ## Phase 11: Health Check
 
