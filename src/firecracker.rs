@@ -132,6 +132,9 @@ impl NetworkInterface {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntropyDevice {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BootPlan {
     pub machine_config: MachineConfig,
     pub boot_source: BootSource,
@@ -217,6 +220,11 @@ impl FirecrackerClient {
         )
     }
 
+    pub fn put_entropy_device(&self, entropy_device: &EntropyDevice) -> Result<UnixHttpRequest> {
+        let body = serde_json::to_string(entropy_device)?;
+        UnixHttpRequest::new("PUT", "/entropy", body)
+    }
+
     pub fn build_boot_requests(&self, plan: &BootPlan) -> Result<Vec<UnixHttpRequest>> {
         let mut requests = vec![
             self.put_machine_config(&plan.machine_config)?,
@@ -230,6 +238,7 @@ impl FirecrackerClient {
             requests.push(self.put_drive(data_drive)?);
         }
         requests.push(self.put_network_interface(&plan.network_interface)?);
+        requests.push(self.put_entropy_device(&EntropyDevice {})?);
         Ok(requests)
     }
 
@@ -321,9 +330,20 @@ mod tests {
                 "/machine-config",
                 "/boot-source",
                 "/drives/rootfs",
-                "/network-interfaces/eth0"
+                "/network-interfaces/eth0",
+                "/entropy"
             ]
         );
+    }
+
+    #[test]
+    fn builds_entropy_device_request_payload() {
+        let client = FirecrackerClient::new("/tmp/firecracker.socket").unwrap();
+        let request = client.put_entropy_device(&EntropyDevice {}).unwrap();
+
+        assert_eq!(request.method, "PUT");
+        assert_eq!(request.path, "/entropy");
+        assert_eq!(request.body, "{}");
     }
 
     #[test]
@@ -354,7 +374,8 @@ mod tests {
                 "/boot-source",
                 "/drives/rootfs",
                 "/drives/data",
-                "/network-interfaces/eth0"
+                "/network-interfaces/eth0",
+                "/entropy"
             ]
         );
         assert_eq!(
