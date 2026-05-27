@@ -8,6 +8,7 @@ use crate::registry::{AppStatus, Registry};
 use crate::runtime::{RuntimeLayout, RuntimeState, RuntimeStatus};
 use crate::ssh::{SshRunner, remote_runtime_dir_display, validate_remote_name};
 use anyhow::{Context, Result, bail};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -47,6 +48,12 @@ pub struct CheckOptions {
 pub struct SetupOptions {
     pub worker: Option<String>,
     pub caddy: bool,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct CleanupOptions {
+    pub worker: Option<String>,
+    pub stale_taps: bool,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -186,6 +193,7 @@ fn boot_vm_on_worker(
     let state = RuntimeState::new(app.to_string(), client.api_socket_path().to_path_buf())
         .with_worker(worker_name.to_string())
         .with_remote_runtime_dir(PathBuf::from(&remote_runtime))
+        .with_tap(params.tap.to_string())
         .with_status(RuntimeStatus::Starting)
         .with_status_message("boot plan prepared");
     state.save(&layout.state_file_path())?;
@@ -212,6 +220,7 @@ fn boot_vm_on_worker(
     RuntimeState::new(app.to_string(), client.api_socket_path().to_path_buf())
         .with_worker(worker_name.to_string())
         .with_remote_runtime_dir(PathBuf::from(&remote_runtime))
+        .with_tap(params.tap.to_string())
         .with_pid(pid)
         .with_status(RuntimeStatus::Starting)
         .with_status_message("Firecracker started")
@@ -226,6 +235,7 @@ fn boot_vm_on_worker(
     RuntimeState::new(app.to_string(), client.api_socket_path().to_path_buf())
         .with_worker(worker_name.to_string())
         .with_remote_runtime_dir(PathBuf::from(&remote_runtime))
+        .with_tap(params.tap.to_string())
         .with_pid(pid)
         .with_status(RuntimeStatus::Running)
         .with_status_message("booted")
@@ -284,6 +294,49 @@ pub fn setup(options: SetupOptions) -> Result<()> {
     println!("ok");
 
     Ok(())
+}
+
+pub fn cleanup(options: CleanupOptions) -> Result<()> {
+    let config = load_config()?;
+    let (worker_name, worker) = config.worker(options.worker.as_deref())?;
+    let runner = SshRunner::new(worker.clone());
+
+    println!("cleanup: worker {worker_name} ({})", worker.ssh_target());
+
+    if options.stale_taps {
+        let preserve_taps = runtime_taps_for_worker(&config, worker_name)?;
+        let removed = runner.cleanup_stale_tap_interfaces(&preserve_taps)?;
+        if removed.is_empty() {
+            println!("cleanup: no stale TAP interfaces found");
+        } else {
+            for tap in &removed {
+                println!("cleanup: removed TAP {tap}");
+            }
+            println!(
+                "cleanup: removed {} stale TAP interface{}",
+                removed.len(),
+                if removed.len() == 1 { "" } else { "s" }
+            );
+        }
+    } else {
+        println!("cleanup: nothing selected");
+    }
+
+    Ok(())
+}
+
+fn runtime_taps_for_worker(config: &Config, worker_name: &str) -> Result<Vec<String>> {
+    let entries = crate::runtime::list_runtime_entries(&config.runtime_dir)?;
+    let mut taps = BTreeSet::new();
+    for state in entries.values() {
+        if state.worker.as_deref() == Some(worker_name)
+            && let Some(tap) = &state.tap
+        {
+            taps.insert(tap.clone());
+        }
+    }
+
+    Ok(taps.into_iter().collect())
 }
 
 pub fn ps() -> Result<()> {
@@ -840,6 +893,7 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
                 .unwrap_or_else(|| worker_name.clone()),
         )
         .with_remote_runtime_dir(primary_remote_dir)
+        .with_tap(deploy_state.tap.clone().unwrap_or(deploy_tap))
         .with_status(RuntimeStatus::Running)
         .with_status_message("deployed")
         .save(&new_layout.state_file_path())?;

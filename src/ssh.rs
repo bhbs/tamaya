@@ -183,6 +183,18 @@ impl SshRunner {
         Ok(())
     }
 
+    pub fn cleanup_stale_tap_interfaces(&self, preserve_taps: &[String]) -> Result<Vec<String>> {
+        for tap in preserve_taps {
+            validate_remote_name("tap", tap)?;
+        }
+        let output = self
+            .run_shell(&cleanup_stale_tap_interfaces_script(preserve_taps))
+            .context("failed to clean up stale remote TAP interfaces")?;
+        let stdout = String::from_utf8(output.stdout).context("ssh stdout is not utf-8")?;
+
+        Ok(stdout.lines().map(ToOwned::to_owned).collect())
+    }
+
     pub fn start_firecracker(
         &self,
         firecracker_bin: &str,
@@ -237,15 +249,14 @@ impl SshRunner {
     pub fn rename_runtime_dir(&self, old_path: &Path, new_path: &Path) -> Result<()> {
         let old_path = path_to_remote_string(old_path)?;
         let new_path = path_to_remote_string(new_path)?;
-        if let Err(error) = self.run_shell(&rename_runtime_dir_script(&old_path, &new_path)) {
-            if self
+        if let Err(error) = self.run_shell(&rename_runtime_dir_script(&old_path, &new_path))
+            && self
                 .run_shell(&runtime_dir_renamed_script(&old_path, &new_path))
                 .is_err()
-            {
-                return Err(error).context(format!(
-                    "failed to rename remote runtime dir {old_path} → {new_path}"
-                ));
-            }
+        {
+            return Err(error).context(format!(
+                "failed to rename remote runtime dir {old_path} → {new_path}"
+            ));
         }
         Ok(())
     }
@@ -619,6 +630,55 @@ fi
     )
 }
 
+fn cleanup_stale_tap_interfaces_script(preserve_taps: &[String]) -> String {
+    let preserve_pattern = if preserve_taps.is_empty() {
+        String::new()
+    } else {
+        format!(
+            r#"
+  case "$tap" in
+    {}) continue ;;
+  esac
+"#,
+            preserve_taps
+                .iter()
+                .map(|tap| shell_quote(tap))
+                .collect::<Vec<_>>()
+                .join("|")
+        )
+    };
+
+    format!(
+        r#"set -eu
+if ! command -v ip >/dev/null 2>&1; then
+  echo "ip command not found" >&2
+  exit 1
+fi
+
+ip tuntap show 2>/dev/null | while IFS=: read -r tap _; do
+  case "$tap" in
+    t-*|*-deploy) ;;
+    *) continue ;;
+  esac
+{preserve_pattern}
+
+  if ! ip link show dev "$tap" >/dev/null 2>&1; then
+    continue
+  fi
+
+  state="$(ip -brief link show dev "$tap" | awk '{{print $2}}')"
+  if [ "$state" != "DOWN" ]; then
+    continue
+  fi
+
+  ip link set "$tap" down 2>/dev/null || true
+  ip tuntap del dev "$tap" mode tap
+  printf '%s\n' "$tap"
+done
+"#
+    )
+}
+
 fn create_runtime_dirs_script(app: &str) -> String {
     format!(
         r#"set -eu
@@ -917,6 +977,19 @@ mod tests {
         assert!(script.contains("ip link show dev \"$tap\""));
         assert!(script.contains("ip tuntap add dev \"$tap\" mode tap"));
         assert!(script.contains("ip link set \"$tap\" up"));
+        assert!(script.contains("printf '%s\\n' \"$tap\""));
+    }
+
+    #[test]
+    fn builds_stale_tap_cleanup_script() {
+        let script = cleanup_stale_tap_interfaces_script(&["t-active".to_string()]);
+
+        assert!(script.contains("ip tuntap show"));
+        assert!(script.contains("t-*|*-deploy"));
+        assert!(script.contains("'t-active') continue"));
+        assert!(script.contains("ip -brief link show dev \"$tap\""));
+        assert!(script.contains("[ \"$state\" != \"DOWN\" ]"));
+        assert!(script.contains("ip tuntap del dev \"$tap\" mode tap"));
         assert!(script.contains("printf '%s\\n' \"$tap\""));
     }
 

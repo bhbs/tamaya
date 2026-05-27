@@ -80,6 +80,8 @@ pub struct RuntimeState {
     pub worker: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_runtime_dir: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tap: Option<String>,
     pub status: RuntimeStatus,
     pub status_message: Option<String>,
 }
@@ -92,6 +94,7 @@ impl RuntimeState {
             api_socket,
             worker: None,
             remote_runtime_dir: None,
+            tap: None,
             status: RuntimeStatus::Unknown,
             status_message: None,
         }
@@ -120,6 +123,11 @@ impl RuntimeState {
 
     pub fn with_remote_runtime_dir(mut self, remote_runtime_dir: impl Into<PathBuf>) -> Self {
         self.remote_runtime_dir = Some(remote_runtime_dir.into());
+        self
+    }
+
+    pub fn with_tap(mut self, tap: impl Into<String>) -> Self {
+        self.tap = Some(tap.into());
         self
     }
 

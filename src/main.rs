@@ -107,6 +107,9 @@ fn main() -> Result<()> {
         Command::Stop { app } => app::stop(&app),
         Command::Logs { app } => app::logs(&app),
         Command::Setup { worker, caddy } => app::setup(app::SetupOptions { worker, caddy }),
+        Command::Cleanup { worker, stale_taps } => {
+            app::cleanup(app::CleanupOptions { worker, stale_taps })
+        }
         Command::Unlock { app } => app::unlock(&app),
     }
 }

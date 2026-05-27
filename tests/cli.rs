@@ -758,6 +758,34 @@ fn setup_installs_caddy_on_worker() {
 }
 
 #[test]
+fn cleanup_removes_stale_taps_on_worker() {
+    let project = initialized_project("cleanup-taps");
+    add_worker_config(&project);
+    let fake_ssh = fake_ssh_bin(&project);
+    let fake_ssh_log = project.join("fake-ssh.log");
+
+    let output = v_command(&project)
+        .env("V_SSH_BIN", &fake_ssh)
+        .env("V_FAKE_SSH_LOG", &fake_ssh_log)
+        .args(["cleanup", "--worker", "vps-prod", "--stale-taps"])
+        .output()
+        .expect("run cleanup");
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = stdout(&output);
+    assert!(stdout.contains("cleanup: worker vps-prod"));
+    assert!(stdout.contains("cleanup: removed TAP t-stale"));
+    assert!(stdout.contains("cleanup: removed TAP web-deploy"));
+    assert!(stdout.contains("cleanup: removed 2 stale TAP interfaces"));
+
+    let ssh_log = fs::read_to_string(fake_ssh_log).expect("read fake ssh log");
+    assert!(ssh_log.contains("ip tuntap show"));
+    assert!(ssh_log.contains("ip -brief link show dev \"$tap\""));
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
+#[test]
 fn check_with_caddy_config_detects_caddy() {
     let project = initialized_project("check-caddy");
     add_worker_config_with_caddy(&project);
@@ -914,6 +942,10 @@ case "$*" in
     ;;
   *"tap='\"'\"'tap-web'\"'\"'"*)
     printf '%s\n' "tap-web"
+    ;;
+  *"ip tuntap show"*"ip -brief link show"*)
+    printf '%s\n' "t-stale"
+    printf '%s\n' "web-deploy"
     ;;
   *"tap='"*)
     printf '%s\n' "tap-fake"

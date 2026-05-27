@@ -110,6 +110,13 @@ pub enum Command {
         #[arg(long)]
         caddy: bool,
     },
+    /// Clean up stale worker-side resources.
+    Cleanup {
+        #[arg(long)]
+        worker: Option<String>,
+        #[arg(long)]
+        stale_taps: bool,
+    },
     /// Force-clean up stale lock files for an app.
     Unlock { app: String },
 }
@@ -323,5 +330,17 @@ mod tests {
 
         assert!(matches!(cli.command, Command::Setup { caddy, .. }
                 if caddy));
+    }
+
+    #[test]
+    fn parses_cleanup_stale_taps() {
+        let cli = Cli::try_parse_from(["v", "cleanup", "--worker", "vps-prod", "--stale-taps"])
+            .expect("parse cleanup command");
+
+        assert!(matches!(cli.command, Command::Cleanup {
+                worker, stale_taps,
+            }
+                if worker.as_deref() == Some("vps-prod")
+                    && stale_taps));
     }
 }
