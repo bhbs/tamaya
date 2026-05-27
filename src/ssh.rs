@@ -238,7 +238,9 @@ impl SshRunner {
         let old_path = path_to_remote_string(old_path)?;
         let new_path = path_to_remote_string(new_path)?;
         self.run_shell(&rename_runtime_dir_script(&old_path, &new_path))
-            .context(format!("failed to rename remote runtime dir {old_path} → {new_path}"))?;
+            .context(format!(
+                "failed to rename remote runtime dir {old_path} → {new_path}"
+            ))?;
         Ok(())
     }
 
@@ -253,7 +255,9 @@ impl SshRunner {
         validate_remote_name("health_check_host", host)?;
         validate_remote_name("health_check_path", path)?;
         self.run_shell(&http_health_check_script(host, port, path))
-            .context(format!("HTTP health check failed for http://{host}:{port}{path}"))
+            .context(format!(
+                "HTTP health check failed for http://{host}:{port}{path}"
+            ))
             .map(|_| ())
     }
 

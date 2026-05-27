@@ -129,12 +129,9 @@ impl Drop for DeployCleanup {
         // Best-effort: restore previous registry status
         let old_status = self.old_registry_status.clone();
         if let Ok(mut registry) = Registry::load(&self.registry_file) {
-            registry
-                .apps
-                .entry(self.app.clone())
-                .and_modify(|entry| {
-                    entry.status = old_status.clone();
-                });
+            registry.apps.entry(self.app.clone()).and_modify(|entry| {
+                entry.status = old_status.clone();
+            });
             let _ = registry.save(&self.registry_file);
         }
     }
@@ -531,18 +528,16 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
         config.registry_file.clone(),
     );
 
-    let (worker_name, worker) = resolve_worker(&config, options.worker.as_deref(), options.dry_run)?
-        .context("worker is required for deploy")?;
+    let (worker_name, worker) =
+        resolve_worker(&config, options.worker.as_deref(), options.dry_run)?
+            .context("worker is required for deploy")?;
     cleanup.set_worker(worker.clone());
 
     // Mark deploying — Drop guard reverts this on failure
     registry.apps.insert(
         app.to_string(),
         crate::registry::App {
-            current_image: registry
-                .apps
-                .get(app)
-                .and_then(|e| e.current_image.clone()),
+            current_image: registry.apps.get(app).and_then(|e| e.current_image.clone()),
             previous_image: registry
                 .apps
                 .get(app)
@@ -599,31 +594,31 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
             options.health_check_host, old_port
         );
         for i in 0..options.health_check_retries {
-        if i > 0 {
-            thread::sleep(Duration::from_secs(
-                options.health_check_interval_secs as u64,
-            ));
-        }
-        let runner = SshRunner::new(worker.clone());
-        let result = if let Some(ref path) = options.health_check_path {
-            runner.http_health_check(&options.health_check_host, old_port, path)
-        } else {
-            runner.health_check(&options.health_check_host, old_port)
-        };
-        match result {
-            Ok(()) => {
-                println!(
-                    "deploy: health check passed (attempt {}/{})",
-                    i + 1,
-                    options.health_check_retries
-                );
-                health_ok = true;
-                break;
+            if i > 0 {
+                thread::sleep(Duration::from_secs(
+                    options.health_check_interval_secs as u64,
+                ));
             }
-            Err(_) if i + 1 == options.health_check_retries => {}
-            Err(_) => {}
+            let runner = SshRunner::new(worker.clone());
+            let result = if let Some(ref path) = options.health_check_path {
+                runner.http_health_check(&options.health_check_host, old_port, path)
+            } else {
+                runner.health_check(&options.health_check_host, old_port)
+            };
+            match result {
+                Ok(()) => {
+                    println!(
+                        "deploy: health check passed (attempt {}/{})",
+                        i + 1,
+                        options.health_check_retries
+                    );
+                    health_ok = true;
+                    break;
+                }
+                Err(_) if i + 1 == options.health_check_retries => {}
+                Err(_) => {}
+            }
         }
-    }
     }
     if !health_ok {
         bail!(
@@ -665,9 +660,7 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
 
     // Switch traffic
     println!("deploy: switching traffic for {app}");
-    println!(
-        "deploy: update your reverse proxy to route traffic for {app} to the new VM"
-    );
+    println!("deploy: update your reverse proxy to route traffic for {app} to the new VM");
     println!("deploy: reload your proxy (e.g. `systemctl reload caddy`)");
 
     // Drain old VM

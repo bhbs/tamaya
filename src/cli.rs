@@ -135,8 +135,7 @@ mod tests {
         ])
         .expect("parse deploy command");
 
-        assert!(
-            matches!(cli.command, Command::Deploy {
+        assert!(matches!(cli.command, Command::Deploy {
                 app,
                 worker,
                 kernel,
@@ -154,8 +153,7 @@ mod tests {
                     && tap == "tap-web"
                     && vcpu == 2
                     && memory_mib == 512
-                    && !dry_run)
-        );
+                    && !dry_run));
     }
 
     #[test]
@@ -172,10 +170,8 @@ mod tests {
         ])
         .expect("parse deploy dry-run command");
 
-        assert!(
-            matches!(cli.command, Command::Deploy { app, dry_run, .. }
-                if app == "myapp" && dry_run)
-        );
+        assert!(matches!(cli.command, Command::Deploy { app, dry_run, .. }
+                if app == "myapp" && dry_run));
     }
 
     #[test]
