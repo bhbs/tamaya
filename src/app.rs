@@ -78,12 +78,9 @@ pub struct DeployOptions {
 }
 
 #[derive(Clone)]
-#[allow(dead_code)]
 struct VmBootContext {
     pid: u32,
-    worker_name: String,
     remote_runtime_dir: PathBuf,
-    api_socket_path: PathBuf,
 }
 
 /// Guard that cleans up a failed deploy attempt on drop.
@@ -245,9 +242,7 @@ fn boot_vm_on_worker(
 
     Ok(VmBootContext {
         pid,
-        worker_name: worker_name.to_string(),
         remote_runtime_dir: PathBuf::from(remote_runtime),
-        api_socket_path,
     })
 }
 

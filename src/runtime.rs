@@ -22,11 +22,6 @@ impl RuntimeLayout {
         Self { app, app_dir }
     }
 
-    #[allow(dead_code)]
-    pub fn app(&self) -> &str {
-        &self.app
-    }
-
     pub fn app_dir(&self) -> &Path {
         &self.app_dir
     }
@@ -100,17 +95,11 @@ impl RuntimeState {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn for_layout(layout: &RuntimeLayout) -> Self {
-        Self::new(layout.app().to_owned(), layout.api_socket_path())
-    }
-
     pub fn with_status(mut self, status: RuntimeStatus) -> Self {
         self.status = status;
         self
     }
 
-    #[allow(dead_code)]
     pub fn with_pid(mut self, pid: u32) -> Self {
         self.pid = Some(pid);
         self
@@ -188,7 +177,6 @@ mod tests {
         let layout = RuntimeLayout::from_runtime_dir(Path::new("/tmp/project/.v/runtime"), "api");
 
         assert_eq!(layout.app_dir(), Path::new("/tmp/project/.v/runtime/api"));
-        assert_eq!(layout.app(), "api");
         assert_eq!(
             layout.api_socket_path(),
             PathBuf::from("/tmp/project/.v/runtime/api/firecracker.sock")
@@ -235,7 +223,7 @@ mod tests {
     fn state_saves_and_loads_as_toml() {
         let root = temp_project_dir("runtime-state");
         let layout = RuntimeLayout::from_runtime_dir(&root.join(".v/runtime"), "web");
-        let state = RuntimeState::for_layout(&layout)
+        let state = RuntimeState::new("web", layout.api_socket_path())
             .with_status(RuntimeStatus::Running)
             .with_status_message("booted");
 
@@ -279,12 +267,13 @@ mod tests {
         app_web.create_dirs().unwrap();
         app_api.create_dirs().unwrap();
 
-        let state_web = RuntimeState::for_layout(&app_web)
+        let state_web = RuntimeState::new("web", app_web.api_socket_path())
             .with_status(RuntimeStatus::Running)
             .with_status_message("booted");
         state_web.save(&app_web.state_file_path()).unwrap();
 
-        let state_api = RuntimeState::for_layout(&app_api).with_status(RuntimeStatus::Starting);
+        let state_api = RuntimeState::new("api", app_api.api_socket_path())
+            .with_status(RuntimeStatus::Starting);
         state_api.save(&app_api.state_file_path()).unwrap();
 
         let entries = list_runtime_entries(&runtime_dir).expect("list entries");

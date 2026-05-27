@@ -45,7 +45,6 @@ impl SshRunner {
         self.command(&format!("sh -lc {}", shell_quote(script)))
     }
 
-    #[allow(dead_code)]
     pub fn run_shell(&self, script: &str) -> Result<Output> {
         let output = self
             .shell_command(script)
