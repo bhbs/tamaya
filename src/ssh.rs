@@ -381,6 +381,19 @@ impl SshRunner {
         Ok(())
     }
 
+    #[allow(dead_code)]
+    pub fn remote_dir_exists(&self, path: &Path) -> Result<bool> {
+        let path = path_to_remote_string(path)?;
+        let output = self
+            .run_shell(&check_remote_dir_exists_script(&path))
+            .context(format!(
+                "failed to check remote directory {}",
+                path
+            ))?;
+        let stdout = String::from_utf8(output.stdout).context("ssh stdout is not utf-8")?;
+        Ok(stdout.trim() == "exists")
+    }
+
     pub fn stream_shell(&self, script: &str) -> Result<()> {
         let status = self.shell_command(script).status().context(format!(
             "failed to run ssh stream command on worker {}",
@@ -767,6 +780,14 @@ fn check_caddy_script() -> String {
     ssh_script!("check_caddy.sh").to_string()
 }
 
+#[allow(dead_code)]
+fn check_remote_dir_exists_script(path: &str) -> String {
+    render_ssh_script(
+        ssh_script!("check_remote_dir_exists.sh"),
+        &[("path", shell_quote(path))],
+    )
+}
+
 fn install_worker_prerequisites_script(firecracker_bin: &str, caddy_config_dir: &str) -> String {
     render_ssh_script(
         ssh_script!("install_worker_prerequisites.sh"),
@@ -1058,5 +1079,15 @@ mod tests {
         assert!(script.contains("caddy_config_dir='/etc/caddy'"));
         assert!(script.contains("install_packages caddy"));
         assert!(script.contains("caddy ready with config dir $caddy_config_dir"));
+    }
+
+    #[test]
+    fn builds_remote_dir_exists_script() {
+        let script = check_remote_dir_exists_script("/run/v/web");
+
+        assert!(script.contains("dir='/run/v/web'"));
+        assert!(script.contains("[ -d \"$dir\" ]"));
+        assert!(script.contains("printf 'exists\\n'"));
+        assert!(script.contains("printf 'missing\\n'"));
     }
 }

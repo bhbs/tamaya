@@ -8,6 +8,7 @@ use crate::registry::{AppStatus, Registry};
 use crate::runtime::{RuntimeLayout, RuntimeState, RuntimeStatus};
 use crate::ssh::{SshRunner, validate_remote_name};
 use anyhow::{Context, Result, bail};
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -373,6 +374,36 @@ pub fn ps() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[allow(dead_code)]
+pub fn check_runtime_alignment(
+    runtime_entries: &BTreeMap<String, RuntimeState>,
+    config: &Config,
+) -> Vec<String> {
+    let mut misaligned = Vec::new();
+    for (name, state) in runtime_entries {
+        if let (Some(worker_name), Some(remote_dir)) = (&state.worker, &state.remote_runtime_dir) {
+            if let Ok((_, worker)) = config.worker(Some(worker_name)) {
+                let runner = SshRunner::new(worker.clone());
+                match runner.remote_dir_exists(remote_dir) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        log::warn!(
+                            "{}: remote runtime dir {} does not exist on worker {worker_name}",
+                            name,
+                            remote_dir.display()
+                        );
+                        misaligned.push(name.clone());
+                    }
+                    Err(e) => {
+                        log::warn!("{name}: could not verify remote runtime dir on worker {worker_name}: {e:#}");
+                    }
+                }
+            }
+        }
+    }
+    misaligned
 }
 
 pub fn check(options: CheckOptions) -> Result<()> {
@@ -843,30 +874,32 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
     log::info!("deploy: renaming remote runtime {deploy_app} → {app}");
     let deploy_remote_dir = ctx.remote_runtime_dir.clone();
     let remote_name_pattern = format!("/{deploy_app}");
-    let primary_remote_dir = deploy_remote_dir
-        .to_str()
-        .map(|s| PathBuf::from(s.replace(&remote_name_pattern, &format!("/{app}"))))
-        .and_then(|new_dir| {
-            let runner = SshRunner::new(worker.clone());
-            match runner.rename_runtime_dir(&deploy_remote_dir, &new_dir) {
-                Ok(_) => {
-                    log::info!(
-                        "deploy: renamed remote runtime {} → {}",
-                        deploy_remote_dir.display(),
-                        new_dir.display()
-                    );
-                    Some(new_dir)
-                }
-                Err(e) => {
-                    log::error!(
-                        "deploy: could not rename remote runtime (keeping {}): {e:#}",
-                        deploy_remote_dir.display()
-                    );
-                    None
-                }
-            }
-        })
-        .unwrap_or_else(|| deploy_remote_dir.clone());
+    let new_dir = PathBuf::from(
+        deploy_remote_dir
+            .to_string_lossy()
+            .replace(&remote_name_pattern, &format!("/{app}")),
+    );
+    let (primary_remote_dir, rename_failed) = match rename_runtime_dir_with_retries(
+        worker,
+        &deploy_remote_dir,
+        &new_dir,
+    ) {
+        Ok(()) => {
+            log::info!(
+                "deploy: renamed remote runtime {} → {}",
+                deploy_remote_dir.display(),
+                new_dir.display()
+            );
+            (new_dir, false)
+        }
+        Err(e) => {
+            log::error!(
+                "deploy: could not rename remote runtime (keeping {}): {e:#}",
+                deploy_remote_dir.display()
+            );
+            (deploy_remote_dir.clone(), true)
+        }
+    };
 
     // Swap runtime state: {app}-deploy → {app}
     log::info!("deploy: swapping runtime state {deploy_app} → {app}");
@@ -875,6 +908,11 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
     old_layout.remove()?;
     new_layout.create_dirs()?;
     let primary_api_socket = primary_remote_dir.join("firecracker.sock");
+    let status_message = if rename_failed {
+        "deployed (runtime rename failed)"
+    } else {
+        "deployed"
+    };
     RuntimeState::new(app.to_string(), primary_api_socket)
         .with_pid(deploy_state.pid.unwrap_or(ctx.pid))
         .with_worker(
@@ -886,7 +924,7 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
         .with_remote_runtime_dir(primary_remote_dir)
         .with_tap(deploy_state.tap.clone().unwrap_or(deploy_tap))
         .with_status(RuntimeStatus::Running)
-        .with_status_message("deployed")
+        .with_status_message(status_message)
         .save(&new_layout.state_file_path())?;
     deploy_layout.remove()?;
     log::info!("deploy: runtime state swapped");
@@ -911,6 +949,31 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
     log::info!("deploy: {app} deployed successfully");
 
     Ok(())
+}
+
+fn rename_runtime_dir_with_retries(
+    worker: &WorkerConfig,
+    old_path: &Path,
+    new_path: &Path,
+) -> Result<()> {
+    let runner = SshRunner::new(worker.clone());
+    let mut last_error = None;
+    for attempt in 1..=3u32 {
+        match runner.rename_runtime_dir(old_path, new_path) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last_error = Some(e);
+                if attempt < 3 {
+                    log::warn!(
+                        "deploy: remote rename attempt {}/3 failed, retrying...",
+                        attempt
+                    );
+                    thread::sleep(Duration::from_millis(500 * attempt as u64));
+                }
+            }
+        }
+    }
+    Err(last_error.unwrap())
 }
 
 pub fn unlock(app: &str) -> Result<()> {
@@ -956,6 +1019,7 @@ pub fn stop(app: &str) -> Result<()> {
     let config = load_config()?;
     let _app_lock = LockFile::acquire(&config.locks_dir, &app_lock_name(app))?;
     let layout = RuntimeLayout::from_runtime_dir(&config.runtime_dir, app);
+    let mut registry = Registry::load(&config.registry_file)?;
 
     let state = match RuntimeState::load(&layout.state_file_path()) {
         Ok(state) => state,
@@ -994,6 +1058,11 @@ pub fn stop(app: &str) -> Result<()> {
         let _ = runner.remove_caddy_config(app);
         let _ = runner.reload_caddy();
     }
+
+    registry.apps.entry(app.to_string()).and_modify(|entry| {
+        entry.status = AppStatus::Stopped;
+    });
+    registry.save(&config.registry_file)?;
 
     Ok(())
 }

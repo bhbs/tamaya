@@ -10,11 +10,7 @@
 - [x] Phase 5: Image build (Docker export → tar artifact)
 - [x] Phase 6: Logging (unified format with timestamps/levels, deploy step logging, worker-aware SSH errors)
 - [x] Phase 7: TAP Management
-
-## Phase 8: Runtime Directory Stability
-
-- [ ] Maintain consistent state when `{app}-deploy → {app}` rename fails
-- [ ] Check alignment between remote runtime dir and local runtime state
+- [x] Phase 8: Runtime Directory Stability
 
 ## Phase 9: Lock Stability
 
