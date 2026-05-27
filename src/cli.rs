@@ -56,8 +56,6 @@ pub enum Command {
         skip_rootfs: bool,
         #[arg(long)]
         skip_tap: bool,
-        #[arg(long)]
-        skip_caddy: bool,
     },
     /// Deploy an immutable app image.
     Deploy {
@@ -107,8 +105,6 @@ pub enum Command {
     Setup {
         #[arg(long)]
         worker: Option<String>,
-        #[arg(long)]
-        caddy: bool,
     },
     /// Clean up stale worker-side resources.
     Cleanup {
@@ -318,18 +314,16 @@ mod tests {
             .expect("parse setup command");
 
         assert!(matches!(cli.command, Command::Setup {
-                worker, caddy,
+                worker,
             }
-                if worker.as_deref() == Some("vps-prod")
-                    && !caddy));
+                if worker.as_deref() == Some("vps-prod")));
     }
 
     #[test]
-    fn parses_setup_with_caddy() {
-        let cli = Cli::try_parse_from(["v", "setup", "--caddy"]).expect("parse setup with caddy");
+    fn rejects_setup_with_removed_caddy_flag() {
+        let result = Cli::try_parse_from(["v", "setup", "--caddy"]);
 
-        assert!(matches!(cli.command, Command::Setup { caddy, .. }
-                if caddy));
+        assert!(result.is_err());
     }
 
     #[test]

@@ -1,0 +1,10 @@
+set -eu
+xdg_data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+data_root="$xdg_data_home/v"
+image_dir="$data_root/images"
+mkdir -p "$image_dir"
+destination="$image_dir/{{app}}-{{kind}}-{{filename}}"
+tmp="$destination.tmp.$$"
+cat > "$tmp"
+mv "$tmp" "$destination"
+printf '%s\n' "$destination"

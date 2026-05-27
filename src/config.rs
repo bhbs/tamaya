@@ -31,8 +31,12 @@ pub struct WorkerConfig {
     #[serde(default)]
     pub identity_file: Option<PathBuf>,
     pub firecracker_bin: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub caddy_config_dir: Option<PathBuf>,
+    #[serde(default = "default_caddy_config_dir")]
+    pub caddy_config_dir: PathBuf,
+}
+
+fn default_caddy_config_dir() -> PathBuf {
+    PathBuf::from("/etc/caddy/conf.d")
 }
 
 impl Config {
@@ -250,6 +254,7 @@ firecracker_bin = "/usr/local/bin/firecracker"
         assert_eq!(worker.ssh_target(), "deploy@203.0.113.10");
         assert_eq!(worker.port, None);
         assert_eq!(worker.firecracker_bin, "/usr/local/bin/firecracker");
+        assert_eq!(worker.caddy_config_dir, PathBuf::from("/etc/caddy/conf.d"));
     }
 
     #[test]

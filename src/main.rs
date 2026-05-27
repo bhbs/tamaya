@@ -51,7 +51,6 @@ fn main() -> Result<()> {
             skip_kernel,
             skip_rootfs,
             skip_tap,
-            skip_caddy,
         } => app::check(app::CheckOptions {
             app,
             worker,
@@ -63,7 +62,6 @@ fn main() -> Result<()> {
             skip_kernel,
             skip_rootfs,
             skip_tap,
-            skip_caddy,
         }),
         Command::Ps => app::ps(),
         Command::Deploy {
@@ -106,7 +104,7 @@ fn main() -> Result<()> {
         Command::Rollback { app } => app::rollback(&app),
         Command::Stop { app } => app::stop(&app),
         Command::Logs { app } => app::logs(&app),
-        Command::Setup { worker, caddy } => app::setup(app::SetupOptions { worker, caddy }),
+        Command::Setup { worker } => app::setup(app::SetupOptions { worker }),
         Command::Cleanup { worker, stale_taps } => {
             app::cleanup(app::CleanupOptions { worker, stale_taps })
         }

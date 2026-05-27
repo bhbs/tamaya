@@ -745,14 +745,18 @@ fn setup_installs_caddy_on_worker() {
     let output = v_command(&project)
         .env("V_SSH_BIN", &fake_ssh)
         .env("V_FAKE_SSH_LOG", &fake_ssh_log)
-        .args(["setup", "--worker", "vps-prod", "--caddy"])
+        .args(["setup", "--worker", "vps-prod"])
         .output()
         .expect("run setup");
 
     assert!(output.status.success(), "{output:?}");
     let stdout = stdout(&output);
-    assert!(stdout.contains("kvm/firecracker: ok"));
-    assert!(stdout.contains("caddy:"));
+    assert!(stdout.contains("worker prerequisites: installed"));
+
+    let ssh_log = fs::read_to_string(fake_ssh_log).expect("read fake ssh log");
+    assert!(ssh_log.contains("requested_firecracker_bin="));
+    assert!(ssh_log.contains("caddy_config_dir="));
+    assert!(ssh_log.contains("sudo apt-get install"));
 
     fs::remove_dir_all(project).expect("remove temp project");
 }
@@ -917,6 +921,9 @@ pid="${V_FAKE_FIRECRACKER_PID:-4242}"
 printf '%s\n' "$*" >> "$log"
 
 case "$*" in
+  *"requested_firecracker_bin="*)
+    printf '%s\n' "install_worker_prerequisites"
+    ;;
   *"destination="*"-kernel-vmlinux"*)
     cat >/dev/null
     printf '%s\n' "/tmp/v-fake-images/web-kernel-vmlinux"

@@ -303,12 +303,7 @@ impl SshRunner {
         vm_port: u16,
     ) -> Result<()> {
         validate_remote_name("app", app)?;
-        let config_dir = self
-            .worker
-            .caddy_config_dir
-            .as_ref()
-            .context("worker does not have caddy_config_dir configured")?;
-        let config_dir = path_to_remote_string(config_dir)?;
+        let config_dir = path_to_remote_string(&self.worker.caddy_config_dir)?;
         self.run_shell(&update_caddy_config_script(
             app,
             domain,
@@ -322,12 +317,7 @@ impl SshRunner {
 
     pub fn remove_caddy_config(&self, app: &str) -> Result<()> {
         validate_remote_name("app", app)?;
-        let config_dir = self
-            .worker
-            .caddy_config_dir
-            .as_ref()
-            .context("worker does not have caddy_config_dir configured")?;
-        let config_dir = path_to_remote_string(config_dir)?;
+        let config_dir = path_to_remote_string(&self.worker.caddy_config_dir)?;
         self.run_shell(&remove_caddy_config_script(app, &config_dir))
             .context("failed to remove Caddy config")?;
         Ok(())
@@ -345,9 +335,14 @@ impl SshRunner {
         Ok(())
     }
 
-    pub fn install_caddy(&self) -> Result<()> {
-        self.run_shell(&install_caddy_script())
-            .context("failed to install Caddy on worker")?;
+    pub fn install_worker_prerequisites(&self) -> Result<()> {
+        let firecracker_bin = path_to_remote_string(Path::new(&self.worker.firecracker_bin))?;
+        let caddy_config_dir = path_to_remote_string(&self.worker.caddy_config_dir)?;
+        self.run_shell(&install_worker_prerequisites_script(
+            &firecracker_bin,
+            &caddy_config_dir,
+        ))
+        .context("failed to install worker prerequisites")?;
         Ok(())
     }
 }
@@ -383,249 +378,122 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-fn worker_capability_script(worker: &WorkerConfig) -> String {
-    let firecracker_bin = worker.firecracker_bin.as_str();
+macro_rules! ssh_script {
+    ($name:literal) => {
+        include_str!(concat!("ssh_scripts/", $name))
+    };
+}
 
-    format!(
-        r#"set -eu
-[ "$(uname -s)" = "Linux" ]
-[ -e /dev/kvm ]
-[ -r /dev/kvm ]
-[ -w /dev/kvm ]
-if [ -n "$(id -u)" ]; then :; fi
-command -v sh >/dev/null
-command -v ip >/dev/null
-command -v curl >/dev/null
-if [ -x {firecracker_bin} ]; then
-  :
-else
-  command -v {firecracker_bin} >/dev/null
-fi
-"#,
-        firecracker_bin = shell_quote(firecracker_bin)
+fn render_ssh_script(template: &str, replacements: &[(&str, String)]) -> String {
+    let mut script = template.to_string();
+    for (key, value) in replacements {
+        script = script.replace(&format!("{{{{{key}}}}}"), value);
+    }
+    script
+}
+
+fn worker_capability_script(worker: &WorkerConfig) -> String {
+    render_ssh_script(
+        ssh_script!("worker_capability.sh"),
+        &[(
+            "firecracker_bin",
+            shell_quote(worker.firecracker_bin.as_str()),
+        )],
     )
 }
 
 fn start_firecracker_script(firecracker_bin: &str, api_socket_path: &str, log_dir: &str) -> String {
-    format!(
-        r#"set -eu
-firecracker_bin={firecracker_bin}
-api_socket={api_socket_path}
-log_dir={log_dir}
-runtime_dir="$(dirname "$api_socket")"
-mkdir -p "$runtime_dir" "$log_dir"
-rm -f "$api_socket"
-nohup "$firecracker_bin" --api-sock "$api_socket" > "$log_dir/firecracker.stdout.log" 2> "$log_dir/firecracker.stderr.log" < /dev/null &
-pid=$!
-i=0
-while [ "$i" -lt 200 ]; do
-  if [ -S "$api_socket" ]; then
-    printf '%s\n' "$pid"
-    exit 0
-  fi
-  if ! kill -0 "$pid" 2>/dev/null; then
-    echo "Firecracker exited before creating API socket" >&2
-    exit 1
-  fi
-  i=$((i + 1))
-  sleep 0.025
-done
-kill "$pid" 2>/dev/null || true
-echo "timed out waiting for Firecracker API socket: $api_socket" >&2
-exit 1
-"#,
-        firecracker_bin = shell_quote(firecracker_bin),
-        api_socket_path = shell_quote(api_socket_path),
-        log_dir = shell_quote(log_dir)
+    render_ssh_script(
+        ssh_script!("start_firecracker.sh"),
+        &[
+            ("firecracker_bin", shell_quote(firecracker_bin)),
+            ("api_socket_path", shell_quote(api_socket_path)),
+            ("log_dir", shell_quote(log_dir)),
+        ],
     )
 }
 
 fn firecracker_api_request_script(api_socket_path: &str, request: &UnixHttpRequest) -> String {
-    format!(
-        r#"set -eu
-api_socket={api_socket_path}
-response="$(curl -sS -i --unix-socket "$api_socket" \
-  -X {method} \
-  -H 'Accept: application/json' \
-  -H 'Content-Type: application/json' \
-  --data {body} \
-  {url})"
-status="$(printf '%s\n' "$response" | sed -n '1s/^HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*/\1/p')"
-case "$status" in
-  2??) exit 0 ;;
-  *)
-    printf '%s\n' "$response" >&2
-    exit 1
-    ;;
-esac
-"#,
-        api_socket_path = shell_quote(api_socket_path),
-        method = shell_quote(&request.method),
-        body = shell_quote(&request.body),
-        url = shell_quote(&format!("http://localhost{}", request.path))
+    render_ssh_script(
+        ssh_script!("firecracker_api_request.sh"),
+        &[
+            ("api_socket_path", shell_quote(api_socket_path)),
+            ("method", shell_quote(&request.method)),
+            ("body", shell_quote(&request.body)),
+            (
+                "url",
+                shell_quote(&format!("http://localhost{}", request.path)),
+            ),
+        ],
     )
 }
 
 fn stop_firecracker_script(pid: u32, remote_runtime_dir: &str) -> String {
-    format!(
-        r#"set -eu
-pid={pid}
-runtime_dir={remote_runtime_dir}
-if kill -0 "$pid" 2>/dev/null; then
-  kill -TERM "$pid" 2>/dev/null || true
-fi
-i=0
-while [ "$i" -lt 100 ]; do
-  if ! kill -0 "$pid" 2>/dev/null; then
-    break
-  fi
-  i=$((i + 1))
-  sleep 0.025
-done
-if kill -0 "$pid" 2>/dev/null; then
-  kill -KILL "$pid" 2>/dev/null || true
-fi
-rm -rf "$runtime_dir"
-"#,
-        pid = pid,
-        remote_runtime_dir = shell_quote(remote_runtime_dir)
+    render_ssh_script(
+        ssh_script!("stop_firecracker.sh"),
+        &[
+            ("pid", pid.to_string()),
+            ("remote_runtime_dir", shell_quote(remote_runtime_dir)),
+        ],
     )
 }
 
 fn rename_runtime_dir_script(old_path: &str, new_path: &str) -> String {
-    format!(
-        r#"set -eu
-old={old_path}
-new={new_path}
-if [ ! -d "$old" ]; then
-  echo "source directory does not exist: $old" >&2
-  exit 1
-fi
-if [ -d "$new" ]; then
-  rm -rf "$new"
-fi
-mkdir -p "$(dirname "$new")"
-mv "$old" "$new"
-printf '%s\n' "$new"
-"#,
-        old_path = shell_quote(old_path),
-        new_path = shell_quote(new_path),
+    render_ssh_script(
+        ssh_script!("rename_runtime_dir.sh"),
+        &[
+            ("old_path", shell_quote(old_path)),
+            ("new_path", shell_quote(new_path)),
+        ],
     )
 }
 
 fn runtime_dir_renamed_script(old_path: &str, new_path: &str) -> String {
-    format!(
-        r#"set -eu
-old={old_path}
-new={new_path}
-if [ -d "$new" ] && [ ! -e "$old" ]; then
-  printf '%s\n' "$new"
-else
-  echo "runtime rename did not complete: $old -> $new" >&2
-  exit 1
-fi
-"#,
-        old_path = shell_quote(old_path),
-        new_path = shell_quote(new_path),
+    render_ssh_script(
+        ssh_script!("runtime_dir_renamed.sh"),
+        &[
+            ("old_path", shell_quote(old_path)),
+            ("new_path", shell_quote(new_path)),
+        ],
     )
 }
 
 fn require_readable_file_script(name: &str, path: &str) -> String {
-    format!(
-        r#"set -eu
-name={name}
-input={path}
-case "$input" in
-  '$XDG_DATA_HOME/'*)
-    suffix="${{input#\$XDG_DATA_HOME/}}"
-    base="${{XDG_DATA_HOME:-$HOME/.local/share}}"
-    resolved="$base/$suffix"
-    ;;
-  '$XDG_STATE_HOME/'*)
-    suffix="${{input#\$XDG_STATE_HOME/}}"
-    base="${{XDG_STATE_HOME:-$HOME/.local/state}}"
-    resolved="$base/$suffix"
-    ;;
-  '$XDG_RUNTIME_DIR/'*)
-    suffix="${{input#\$XDG_RUNTIME_DIR/}}"
-    if [ -z "${{XDG_RUNTIME_DIR:-}}" ]; then
-      echo "$name uses XDG_RUNTIME_DIR but it is not set" >&2
-      exit 1
-    fi
-    resolved="$XDG_RUNTIME_DIR/$suffix"
-    ;;
-  /*)
-    resolved="$input"
-    ;;
-  *)
-    echo "$name must be an absolute path or start with \$XDG_DATA_HOME/, \$XDG_STATE_HOME/, or \$XDG_RUNTIME_DIR/" >&2
-    exit 1
-    ;;
-esac
-[ -f "$resolved" ] || {{ echo "$name does not exist or is not a file: $resolved" >&2; exit 1; }}
-[ -r "$resolved" ] || {{ echo "$name is not readable: $resolved" >&2; exit 1; }}
-printf '%s\n' "$resolved"
-"#,
-        name = shell_quote(name),
-        path = shell_quote(path)
+    render_ssh_script(
+        ssh_script!("require_readable_file.sh"),
+        &[("name", shell_quote(name)), ("path", shell_quote(path))],
     )
 }
 
 fn upload_boot_file_script(app: &str, kind: &str, filename: &str) -> String {
-    format!(
-        r#"set -eu
-xdg_data_home="${{XDG_DATA_HOME:-$HOME/.local/share}}"
-data_root="$xdg_data_home/v"
-image_dir="$data_root/images"
-mkdir -p "$image_dir"
-destination="$image_dir/{app}-{kind}-{filename}"
-tmp="$destination.tmp.$$"
-cat > "$tmp"
-mv "$tmp" "$destination"
-printf '%s\n' "$destination"
-"#,
-        app = shell_escape_for_double_quotes(app),
-        kind = shell_escape_for_double_quotes(kind),
-        filename = shell_escape_for_double_quotes(filename)
+    render_ssh_script(
+        ssh_script!("upload_boot_file.sh"),
+        &[
+            ("app", shell_escape_for_double_quotes(app)),
+            ("kind", shell_escape_for_double_quotes(kind)),
+            ("filename", shell_escape_for_double_quotes(filename)),
+        ],
     )
 }
 
 fn require_tap_interface_script(tap: &str) -> String {
-    format!(
-        r#"set -eu
-tap={tap}
-ip link show dev "$tap" >/dev/null
-ip link show dev "$tap" | grep -q '<[^>]*UP'
-printf '%s\n' "$tap"
-"#,
-        tap = shell_quote(tap)
+    render_ssh_script(
+        ssh_script!("require_tap_interface.sh"),
+        &[("tap", shell_quote(tap))],
     )
 }
 
 fn ensure_tap_interface_script(tap: &str) -> String {
-    format!(
-        r#"set -eu
-tap={tap}
-if ! ip link show dev "$tap" >/dev/null 2>&1; then
-  ip tuntap add dev "$tap" mode tap
-fi
-ip link set "$tap" up
-printf '%s\n' "$tap"
-"#,
-        tap = shell_quote(tap)
+    render_ssh_script(
+        ssh_script!("ensure_tap_interface.sh"),
+        &[("tap", shell_quote(tap))],
     )
 }
 
 fn delete_tap_interface_script(tap: &str) -> String {
-    format!(
-        r#"set -eu
-tap={tap}
-if ip link show dev "$tap" >/dev/null 2>&1; then
-  ip link set "$tap" down 2>/dev/null || true
-  ip tuntap del dev "$tap" mode tap
-fi
-"#,
-        tap = shell_quote(tap)
+    render_ssh_script(
+        ssh_script!("delete_tap_interface.sh"),
+        &[("tap", shell_quote(tap))],
     )
 }
 
@@ -647,73 +515,21 @@ fn cleanup_stale_tap_interfaces_script(preserve_taps: &[String]) -> String {
         )
     };
 
-    format!(
-        r#"set -eu
-if ! command -v ip >/dev/null 2>&1; then
-  echo "ip command not found" >&2
-  exit 1
-fi
-
-ip tuntap show 2>/dev/null | while IFS=: read -r tap _; do
-  case "$tap" in
-    t-*|*-deploy) ;;
-    *) continue ;;
-  esac
-{preserve_pattern}
-
-  if ! ip link show dev "$tap" >/dev/null 2>&1; then
-    continue
-  fi
-
-  state="$(ip -brief link show dev "$tap" | awk '{{print $2}}')"
-  if [ "$state" != "DOWN" ]; then
-    continue
-  fi
-
-  ip link set "$tap" down 2>/dev/null || true
-  ip tuntap del dev "$tap" mode tap
-  printf '%s\n' "$tap"
-done
-"#
+    render_ssh_script(
+        ssh_script!("cleanup_stale_tap_interfaces.sh"),
+        &[("preserve_pattern", preserve_pattern)],
     )
 }
 
 fn create_runtime_dirs_script(app: &str) -> String {
-    format!(
-        r#"set -eu
-xdg_data_home="${{XDG_DATA_HOME:-$HOME/.local/share}}"
-xdg_state_home="${{XDG_STATE_HOME:-$HOME/.local/state}}"
-if [ -n "${{XDG_RUNTIME_DIR:-}}" ]; then
-  runtime_root="$XDG_RUNTIME_DIR/v"
-else
-  runtime_root="$xdg_state_home/v/runtime"
-fi
-data_root="$xdg_data_home/v"
-state_root="$xdg_state_home/v"
-runtime_dir="$runtime_root/{app}"
-log_dir="$runtime_dir/logs"
-mkdir -p "$data_root/images" "$data_root/volumes" "$state_root" "$runtime_dir" "$log_dir"
-printf '%s\n' "$runtime_dir"
-"#,
-        app = shell_escape_for_double_quotes(app)
+    render_ssh_script(
+        ssh_script!("create_runtime_dirs.sh"),
+        &[("app", shell_escape_for_double_quotes(app))],
     )
 }
 
 fn logs_script(log_dir: &str) -> String {
-    format!(
-        r#"set -eu
-log_dir={log_dir}
-if [ -d "$log_dir" ]; then
-  for log in "$log_dir"/*.log; do
-    if [ -f "$log" ]; then
-      printf '=== %s ===\n' "$(basename "$log")"
-      cat "$log"
-    fi
-  done
-fi
-"#,
-        log_dir = shell_quote(log_dir)
-    )
+    render_ssh_script(ssh_script!("logs.sh"), &[("log_dir", shell_quote(log_dir))])
 }
 
 fn shell_escape_for_double_quotes(value: &str) -> String {
@@ -746,42 +562,23 @@ fn path_to_remote_string(path: &Path) -> Result<String> {
 }
 
 fn health_check_script(host: &str, port: u16) -> String {
-    format!(
-        r#"set -eu
-host={host}
-port={port}
-if command -v nc >/dev/null 2>&1; then
-  nc -z -w 5 "$host" "$port"
-elif command -v bash >/dev/null 2>&1 && bash -c "timeout 5 bash -c '</dev/tcp/$host/$port' 2>/dev/null"; then
-  :
-elif command -v curl >/dev/null 2>&1; then
-  curl -sf --max-time 5 "http://$host:$port" >/dev/null
-else
-  echo "no tool available for health check (nc, bash TCP, or curl)" >&2
-  exit 1
-fi
-"#,
-        host = shell_quote(host),
-        port = port,
+    render_ssh_script(
+        ssh_script!("health_check.sh"),
+        &[("host", shell_quote(host)), ("port", port.to_string())],
     )
 }
 
 fn http_health_check_script(host: &str, port: u16, path: &str) -> String {
-    format!(
-        r#"set -eu
-host={host}
-port={port}
-path=/{path_clean}
-if command -v curl >/dev/null 2>&1; then
-  curl -sf --max-time 10 "http://$host:$port$path" >/dev/null
-else
-  echo "curl is required for HTTP health checks" >&2
-  exit 1
-fi
-"#,
-        host = shell_quote(host),
-        port = port,
-        path_clean = shell_escape_for_double_quotes(path.trim_start_matches('/')),
+    render_ssh_script(
+        ssh_script!("http_health_check.sh"),
+        &[
+            ("host", shell_quote(host)),
+            ("port", port.to_string()),
+            (
+                "path_clean",
+                shell_escape_for_double_quotes(path.trim_start_matches('/')),
+            ),
+        ],
     )
 }
 
@@ -792,90 +589,49 @@ fn update_caddy_config_script(
     vm_port: u16,
     config_dir: &str,
 ) -> String {
-    format!(
-        r#"set -eu
-app={app}
-domain={domain}
-target={target}
-config_dir={config_dir}
-config_file="$config_dir/$app.caddy"
-sudo mkdir -p "$config_dir"
-sudo tee "$config_file" >/dev/null <<'EOF'
-{domain} {{
-    reverse_proxy {vm_host}:{vm_port}
-}}
-EOF
-printf '%s\n' "$config_file"
-"#,
-        app = shell_escape_for_double_quotes(app),
-        domain = shell_escape_for_double_quotes(domain),
-        target = shell_escape_for_double_quotes(&format!("{vm_host}:{vm_port}")),
-        config_dir = shell_escape_for_double_quotes(config_dir),
-        vm_host = shell_escape_for_double_quotes(vm_host),
-        vm_port = vm_port,
+    render_ssh_script(
+        ssh_script!("update_caddy_config.sh"),
+        &[
+            ("app", shell_escape_for_double_quotes(app)),
+            ("domain", shell_escape_for_double_quotes(domain)),
+            ("domain_block", shell_escape_for_double_quotes(domain)),
+            (
+                "target",
+                shell_escape_for_double_quotes(&format!("{vm_host}:{vm_port}")),
+            ),
+            ("config_dir", shell_escape_for_double_quotes(config_dir)),
+            ("vm_host", shell_escape_for_double_quotes(vm_host)),
+            ("vm_port", vm_port.to_string()),
+        ],
     )
 }
 
 fn remove_caddy_config_script(app: &str, config_dir: &str) -> String {
-    format!(
-        r#"set -eu
-app={app}
-config_dir={config_dir}
-config_file="$config_dir/$app.caddy"
-if [ -f "$config_file" ]; then
-  sudo rm -f "$config_file"
-  printf '%s\n' "$config_file"
-else
-  printf '%s\n' "no config to remove for $app"
-fi
-"#,
-        app = shell_escape_for_double_quotes(app),
-        config_dir = shell_escape_for_double_quotes(config_dir),
+    render_ssh_script(
+        ssh_script!("remove_caddy_config.sh"),
+        &[
+            ("app", shell_escape_for_double_quotes(app)),
+            ("config_dir", shell_escape_for_double_quotes(config_dir)),
+        ],
     )
 }
 
 fn reload_caddy_script() -> String {
-    r#"set -eu
-sudo systemctl reload caddy
-"#
-    .to_string()
+    ssh_script!("reload_caddy.sh").to_string()
 }
 
 fn check_caddy_script() -> String {
-    r#"set -eu
-if command -v caddy >/dev/null 2>&1; then
-  if systemctl is-active --quiet caddy 2>/dev/null; then
-    printf '%s\n' "caddy: installed and running"
-    exit 0
-  fi
-  caddy version >/dev/null 2>&1 && exit 0
-fi
-echo "caddy: not found or not running" >&2
-exit 1
-"#
-    .to_string()
+    ssh_script!("check_caddy.sh").to_string()
 }
 
-fn install_caddy_script() -> String {
-    r#"set -eu
-if command -v caddy >/dev/null 2>&1; then
-  printf '%s\n' "caddy already installed"
-  exit 0
-fi
-echo "installing Caddy via apt..."
-sudo apt update -qq
-sudo apt install -y -qq debian-keyring debian-archive-keyring apt-transport-https curl
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
-  | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
-  | sudo tee /etc/apt/sources.list.d/caddy-stable.list
-sudo apt update -qq
-sudo apt install -y -qq caddy
-sudo systemctl enable caddy
-sudo systemctl start caddy
-printf '%s\n' "caddy installed and started"
-"#
-    .to_string()
+fn install_worker_prerequisites_script(firecracker_bin: &str, caddy_config_dir: &str) -> String {
+    render_ssh_script(
+        ssh_script!("install_worker_prerequisites.sh"),
+        &[
+            ("firecracker_bin", shell_quote(firecracker_bin)),
+            ("caddy_config_dir", shell_quote(caddy_config_dir)),
+        ],
+    )
 }
 
 #[cfg(test)]
@@ -890,7 +646,7 @@ mod tests {
             port: Some(2222),
             identity_file: Some(PathBuf::from("/keys/prod")),
             firecracker_bin: "/usr/local/bin/firecracker".to_string(),
-            caddy_config_dir: Some(PathBuf::from("/etc/caddy/conf.d")),
+            caddy_config_dir: PathBuf::from("/etc/caddy/conf.d"),
         }
     }
 
@@ -1127,11 +883,17 @@ mod tests {
     }
 
     #[test]
-    fn builds_install_caddy_script() {
-        let script = install_caddy_script();
+    fn builds_worker_prerequisite_install_script() {
+        let script =
+            install_worker_prerequisites_script("/usr/local/bin/firecracker", "/etc/caddy");
 
-        assert!(script.contains("sudo apt install -y -qq caddy"));
-        assert!(script.contains("sudo systemctl enable caddy"));
-        assert!(script.contains("caddy-stable"));
+        assert!(script.contains("sudo apt-get install -y -qq"));
+        assert!(script.contains("sudo modprobe kvm"));
+        assert!(script.contains("firecracker-microvm/firecracker/releases/latest"));
+        assert!(script.contains("sudo install -m 0755"));
+        assert!(script.contains("firecracker installed at $firecracker_bin"));
+        assert!(script.contains("caddy_config_dir='/etc/caddy'"));
+        assert!(script.contains("sudo apt-get install -y -qq caddy"));
+        assert!(script.contains("caddy ready with config dir $caddy_config_dir"));
     }
 }

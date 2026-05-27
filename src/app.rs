@@ -41,13 +41,11 @@ pub struct CheckOptions {
     pub skip_kernel: bool,
     pub skip_rootfs: bool,
     pub skip_tap: bool,
-    pub skip_caddy: bool,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SetupOptions {
     pub worker: Option<String>,
-    pub caddy: bool,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -267,23 +265,9 @@ pub fn setup(options: SetupOptions) -> Result<()> {
     println!("v setup: worker {worker_name} ({})", worker.ssh_target());
     println!();
 
-    runner.check_capabilities()?;
-    println!("  kvm/firecracker: ok");
-
-    if options.caddy {
-        if worker.caddy_config_dir.is_none() {
-            println!("  caddy: caddy_config_dir is not set in worker config; add it first");
-        } else {
-            match runner.check_caddy() {
-                Ok(_) => println!("  caddy: already installed"),
-                Err(_) => {
-                    println!("  caddy: installing...");
-                    runner.install_caddy()?;
-                    println!("  caddy: installed");
-                }
-            }
-        }
-    }
+    println!("  worker prerequisites: installing...");
+    runner.install_worker_prerequisites()?;
+    println!("  worker prerequisites: installed");
 
     println!();
     println!("ok");
@@ -495,32 +479,11 @@ pub fn check(options: CheckOptions) -> Result<()> {
         Some(runner.require_tap_interface(&options.tap)?)
     };
 
-    if options.skip_caddy {
-        println!("caddy: skipped");
-    } else if worker.caddy_config_dir.is_some() {
-        match runner.check_caddy() {
-            Ok(_) => println!("caddy: installed and running"),
-            Err(_) => {
-                println!("caddy: not found or not running on worker");
-                println!();
-                println!("  To install Caddy:");
-                println!(
-                    "    sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https"
-                );
-                println!(
-                    "    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \\"
-                );
-                println!(
-                    "      | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg"
-                );
-                println!(
-                    "    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \\"
-                );
-                println!("      | sudo tee /etc/apt/sources.list.d/caddy-stable.list");
-                println!("    sudo apt update && sudo apt install caddy");
-                println!();
-                println!("  See https://caddyserver.com/docs/install for other distributions.");
-            }
+    match runner.check_caddy() {
+        Ok(_) => println!("caddy: installed and running"),
+        Err(_) => {
+            println!("caddy: not found or not running on worker");
+            println!("  run: v setup --worker {worker_name}");
         }
     }
 
@@ -800,7 +763,7 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
     println!("deploy: switching traffic for {app}");
 
     let runner = SshRunner::new(worker.clone());
-    if let (Some(domain), Some(_)) = (options.domain.as_ref(), worker.caddy_config_dir.as_ref()) {
+    if let Some(domain) = options.domain.as_ref() {
         let proxy_target = format!("{}:{}", options.health_check_host, old_port);
         println!("deploy: updating reverse proxy {domain} → {proxy_target}");
         if let Err(e) =
@@ -987,9 +950,7 @@ pub fn stop(app: &str) -> Result<()> {
         None => println!("stop: stopped {app}"),
     }
 
-    if let Some(ref worker) = worker_for_proxy
-        && worker.caddy_config_dir.is_some()
-    {
+    if let Some(ref worker) = worker_for_proxy {
         let runner = SshRunner::new(worker.clone());
         let _ = runner.remove_caddy_config(app);
         let _ = runner.reload_caddy();
