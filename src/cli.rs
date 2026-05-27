@@ -58,7 +58,39 @@ pub enum Command {
         skip_tap: bool,
     },
     /// Deploy an immutable app image.
-    Deploy { app: String },
+    Deploy {
+        app: String,
+        #[arg(long)]
+        worker: Option<String>,
+        #[arg(long)]
+        kernel: PathBuf,
+        #[arg(long)]
+        rootfs: PathBuf,
+        #[arg(long, default_value = "firecracker")]
+        firecracker_bin: PathBuf,
+        #[arg(long, default_value = "tap0")]
+        tap: String,
+        #[arg(long, default_value = "console=ttyS0 reboot=k panic=1 pci=off")]
+        boot_args: String,
+        #[arg(long, default_value_t = 1)]
+        vcpu: u8,
+        #[arg(long, default_value_t = 256)]
+        memory_mib: u32,
+        #[arg(long, default_value = "10.0.0.2")]
+        health_check_host: String,
+        #[arg(long)]
+        health_check_path: Option<String>,
+        #[arg(long, default_value_t = 10)]
+        health_check_retries: u32,
+        #[arg(long, default_value_t = 2)]
+        health_check_interval_secs: u32,
+        #[arg(long, default_value_t = 5)]
+        drain_seconds: u32,
+        #[arg(long)]
+        skip_health_check: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Roll back an app to the previous image.
     Rollback { app: String },
     /// List managed microVMs.
@@ -84,9 +116,66 @@ mod tests {
 
     #[test]
     fn parses_deploy_app_argument() {
-        let cli = Cli::try_parse_from(["v", "deploy", "myapp"]).expect("parse deploy command");
+        let cli = Cli::try_parse_from([
+            "v",
+            "deploy",
+            "myapp",
+            "--kernel",
+            "/kernels/vmlinux",
+            "--rootfs",
+            "/images/myapp-v2.ext4",
+            "--worker",
+            "vps-prod",
+            "--vcpu",
+            "2",
+            "--memory-mib",
+            "512",
+            "--tap",
+            "tap-web",
+        ])
+        .expect("parse deploy command");
 
-        assert!(matches!(cli.command, Command::Deploy { app } if app == "myapp"));
+        assert!(
+            matches!(cli.command, Command::Deploy {
+                app,
+                worker,
+                kernel,
+                rootfs,
+                tap,
+                vcpu,
+                memory_mib,
+                dry_run,
+                ..
+            }
+                if app == "myapp"
+                    && worker.as_deref() == Some("vps-prod")
+                    && kernel == Path::new("/kernels/vmlinux")
+                    && rootfs == Path::new("/images/myapp-v2.ext4")
+                    && tap == "tap-web"
+                    && vcpu == 2
+                    && memory_mib == 512
+                    && !dry_run)
+        );
+    }
+
+    #[test]
+    fn parses_deploy_with_dry_run() {
+        let cli = Cli::try_parse_from([
+            "v",
+            "deploy",
+            "myapp",
+            "--kernel",
+            "/kernels/vmlinux",
+            "--rootfs",
+            "/images/app.ext4",
+            "--dry-run",
+        ])
+        .expect("parse deploy dry-run command");
+
+        assert!(
+            matches!(cli.command, Command::Deploy { app, dry_run, .. }
+                if app == "myapp" && dry_run)
+        );
     }
 
     #[test]

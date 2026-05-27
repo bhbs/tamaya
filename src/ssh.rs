@@ -176,6 +176,13 @@ impl SshRunner {
         Ok(resolved.to_string())
     }
 
+    pub fn delete_tap_interface(&self, tap: &str) -> Result<()> {
+        validate_remote_name("tap", tap)?;
+        self.run_shell(&delete_tap_interface_script(tap))
+            .context(format!("failed to delete remote TAP interface {tap}"))?;
+        Ok(())
+    }
+
     pub fn start_firecracker(
         &self,
         firecracker_bin: &str,
@@ -225,6 +232,29 @@ impl SshRunner {
             .context("failed to stop remote Firecracker")?;
 
         Ok(())
+    }
+
+    pub fn rename_runtime_dir(&self, old_path: &Path, new_path: &Path) -> Result<()> {
+        let old_path = path_to_remote_string(old_path)?;
+        let new_path = path_to_remote_string(new_path)?;
+        self.run_shell(&rename_runtime_dir_script(&old_path, &new_path))
+            .context(format!("failed to rename remote runtime dir {old_path} → {new_path}"))?;
+        Ok(())
+    }
+
+    pub fn health_check(&self, host: &str, port: u16) -> Result<()> {
+        validate_remote_name("health_check_host", host)?;
+        self.run_shell(&health_check_script(host, port))
+            .context(format!("health check failed for {host}:{port}"))
+            .map(|_| ())
+    }
+
+    pub fn http_health_check(&self, host: &str, port: u16, path: &str) -> Result<()> {
+        validate_remote_name("health_check_host", host)?;
+        validate_remote_name("health_check_path", path)?;
+        self.run_shell(&http_health_check_script(host, port, path))
+            .context(format!("HTTP health check failed for http://{host}:{port}{path}"))
+            .map(|_| ())
     }
 
     pub fn stream_logs(&self, remote_log_dir: &Path) -> Result<()> {
@@ -386,6 +416,28 @@ rm -rf "$runtime_dir"
     )
 }
 
+fn rename_runtime_dir_script(old_path: &str, new_path: &str) -> String {
+    format!(
+        r#"set -eu
+old={old_path}
+new={new_path}
+if [ ! -d "$old" ]; then
+  echo "source directory does not exist: $old" >&2
+  exit 1
+fi
+if [ -d "$new" ]; then
+  echo "destination already exists: $new" >&2
+  exit 1
+fi
+mkdir -p "$(dirname "$new")"
+mv "$old" "$new"
+printf '%s\n' "$new"
+"#,
+        old_path = shell_quote(old_path),
+        new_path = shell_quote(new_path),
+    )
+}
+
 fn require_readable_file_script(name: &str, path: &str) -> String {
     format!(
         r#"set -eu
@@ -472,6 +524,19 @@ printf '%s\n' "$tap"
     )
 }
 
+fn delete_tap_interface_script(tap: &str) -> String {
+    format!(
+        r#"set -eu
+tap={tap}
+if ip link show dev "$tap" >/dev/null 2>&1; then
+  ip link set "$tap" down 2>/dev/null || true
+  ip tuntap del dev "$tap" mode tap
+fi
+"#,
+        tap = shell_quote(tap)
+    )
+}
+
 fn create_runtime_dirs_script(app: &str) -> String {
     format!(
         r#"set -eu
@@ -537,6 +602,46 @@ fn path_to_remote_string(path: &Path) -> Result<String> {
     }
 
     Ok(value)
+}
+
+fn health_check_script(host: &str, port: u16) -> String {
+    format!(
+        r#"set -eu
+host={host}
+port={port}
+if command -v nc >/dev/null 2>&1; then
+  nc -z -w 5 "$host" "$port"
+elif command -v bash >/dev/null 2>&1 && bash -c "timeout 5 bash -c '</dev/tcp/$host/$port' 2>/dev/null"; then
+  :
+elif command -v curl >/dev/null 2>&1; then
+  curl -sf --max-time 5 "http://$host:$port" >/dev/null
+else
+  echo "no tool available for health check (nc, bash TCP, or curl)" >&2
+  exit 1
+fi
+"#,
+        host = shell_quote(host),
+        port = port,
+    )
+}
+
+fn http_health_check_script(host: &str, port: u16, path: &str) -> String {
+    format!(
+        r#"set -eu
+host={host}
+port={port}
+path=/{path_clean}
+if command -v curl >/dev/null 2>&1; then
+  curl -sf --max-time 10 "http://$host:$port$path" >/dev/null
+else
+  echo "curl is required for HTTP health checks" >&2
+  exit 1
+fi
+"#,
+        host = shell_quote(host),
+        port = port,
+        path_clean = shell_escape_for_double_quotes(path.trim_start_matches('/')),
+    )
 }
 
 #[cfg(test)]
@@ -696,5 +801,31 @@ mod tests {
         assert!(script.contains("kill -TERM \"$pid\""));
         assert!(script.contains("kill -KILL \"$pid\""));
         assert!(script.contains("rm -rf \"$runtime_dir\""));
+    }
+
+    #[test]
+    fn builds_health_check_script() {
+        let script = health_check_script("10.0.0.2", 8080);
+
+        assert!(script.contains("host='10.0.0.2'"));
+        assert!(script.contains("port=8080"));
+        assert!(script.contains("nc -z -w 5 \"$host\" \"$port\""));
+    }
+
+    #[test]
+    fn builds_http_health_check_script() {
+        let script = http_health_check_script("10.0.0.2", 8080, "/health");
+
+        assert!(script.contains("host='10.0.0.2'"));
+        assert!(script.contains("port=8080"));
+        assert!(script.contains("path=/health"));
+        assert!(script.contains("curl -sf --max-time 10 \"http://$host:$port$path\""));
+    }
+
+    #[test]
+    fn http_health_check_strips_leading_slash_from_path() {
+        let script = http_health_check_script("10.0.0.2", 3000, "/health");
+
+        assert!(script.contains("path=/health"));
     }
 }

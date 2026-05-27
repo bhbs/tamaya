@@ -341,7 +341,27 @@ status_message = "booted"
 
 #[test]
 fn stub_commands_load_config_and_take_locks() {
-    for command in ["deploy", "rollback", "stop", "logs"] {
+    let project = initialized_project("deploy");
+    add_worker_config(&project);
+
+    let output = v_command(&project)
+        .args([
+            "deploy",
+            "web",
+            "--kernel",
+            "/kernels/vmlinux",
+            "--rootfs",
+            "/images/web-v2.ext4",
+            "--dry-run",
+        ])
+        .output()
+        .expect("run deploy");
+
+    assert!(output.status.success(), "deploy failed: {:?}", output);
+    assert!(stdout(&output).contains("web"));
+    fs::remove_dir_all(project).expect("remove temp project");
+
+    for command in ["rollback", "stop", "logs"] {
         let project = initialized_project(command);
 
         let output = v_command(&project)

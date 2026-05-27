@@ -48,13 +48,13 @@
 
 ## Phase 4: Deploy
 
-- Boot a new VM from an immutable image.
-- Run health checks.
-- Update reverse proxy routing.
-- Reload reverse proxy.
-- Drain the old VM.
-- Stop the old VM.
-- Update app registry after a successful switch.
+- [x] Boot a new VM from an immutable image.
+- [x] Run health checks (TCP + HTTP via SSH from worker).
+- [ ] Update reverse proxy routing (prints reload instructions; automatic config generation TBD).
+- [ ] Reload reverse proxy (prints reload instructions; automatic reload TBD).
+- [x] Drain the old VM (configurable `--drain-seconds`).
+- [x] Stop the old VM.
+- [x] Update app registry after a successful switch.
 
 ## Phase 5: Rollback
 
