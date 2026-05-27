@@ -930,9 +930,12 @@ fn deploy_failure_during_boot_cleans_up_resources() {
         "deploy runtime dir should be cleaned up"
     );
 
-    let registry = fs::read_to_string(project.join(".local/state/v/registry.toml"))
-        .expect("read registry");
-    assert!(!registry.contains("deploying"), "registry should not be deploying: {registry}");
+    let registry =
+        fs::read_to_string(project.join(".local/state/v/registry.toml")).expect("read registry");
+    assert!(
+        !registry.contains("deploying"),
+        "registry should not be deploying: {registry}"
+    );
 
     let ssh_log = fs::read_to_string(&fake_ssh_log).expect("read fake ssh log");
     assert!(
@@ -983,9 +986,12 @@ fn deploy_health_check_failure_cleans_up_vm() {
         "deploy runtime dir should be cleaned up"
     );
 
-    let registry = fs::read_to_string(project.join(".local/state/v/registry.toml"))
-        .expect("read registry");
-    assert!(!registry.contains("deploying"), "registry should not be deploying: {registry}");
+    let registry =
+        fs::read_to_string(project.join(".local/state/v/registry.toml")).expect("read registry");
+    assert!(
+        !registry.contains("deploying"),
+        "registry should not be deploying: {registry}"
+    );
 
     let ssh_log = fs::read_to_string(&fake_ssh_log).expect("read fake ssh log");
     assert!(
@@ -1030,17 +1036,23 @@ fn deploy_rename_failure_handles_gracefully() {
         output
     );
 
-    let state = fs::read_to_string(project.join("runtime/v/web/state.toml"))
-        .expect("read runtime state");
+    let state =
+        fs::read_to_string(project.join("runtime/v/web/state.toml")).expect("read runtime state");
     assert!(
         state.contains("deployed (runtime rename failed)"),
         "state should indicate rename failure: {state}"
     );
-    assert!(state.contains("status = \"running\""), "state should show running: {state}");
+    assert!(
+        state.contains("status = \"running\""),
+        "state should show running: {state}"
+    );
 
-    let registry = fs::read_to_string(project.join(".local/state/v/registry.toml"))
-        .expect("read registry");
-    assert!(registry.contains("status = \"running\""), "registry should show running: {registry}");
+    let registry =
+        fs::read_to_string(project.join(".local/state/v/registry.toml")).expect("read registry");
+    assert!(
+        registry.contains("status = \"running\""),
+        "registry should show running: {registry}"
+    );
 
     let ssh_log = fs::read_to_string(&fake_ssh_log).expect("read fake ssh log");
     assert!(
@@ -1220,7 +1232,8 @@ case "$*" in
     :
     ;;
 esac
-"#.to_string();
+"#
+    .to_string();
     fs::write(&path, &script).expect("write fake ssh");
 
     let mut permissions = fs::metadata(&path)
