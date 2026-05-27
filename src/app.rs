@@ -709,6 +709,65 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
     let has_old_vm = old_state.is_some();
 
     if options.dry_run {
+        if let Some(artifact) = &options.artifact {
+            if !artifact.is_file() {
+                bail!(
+                    "local artifact file does not exist: {}",
+                    artifact.display()
+                );
+            }
+        }
+        if let Some(rootfs) = &options.rootfs {
+            if !rootfs.is_file() && !is_remote_boot_path(rootfs) {
+                bail!(
+                    "local rootfs file does not exist: {}; pass an existing local file or a worker-side absolute/XDG path",
+                    rootfs.display()
+                );
+            }
+        }
+        if let Some(data) = &options.data {
+            if !data.is_file() && !is_remote_boot_path(data) {
+                bail!(
+                    "local data file does not exist: {}; pass an existing local file or a worker-side absolute/XDG path",
+                    data.display()
+                );
+            }
+        }
+        if !options.kernel.is_file() && !is_remote_boot_path(&options.kernel) {
+            bail!(
+                "local kernel file does not exist: {}; pass an existing local file or a worker-side absolute/XDG path",
+                options.kernel.display()
+            );
+        }
+
+        if let Some((worker_name, worker)) =
+            resolve_worker(&config, options.worker.as_deref(), true)?
+        {
+            let runner = SshRunner::new(worker.clone());
+            log::info!("deploy: dry-run worker: {worker_name} ({})", worker.ssh_target());
+            runner.check_capabilities()?;
+            log::info!("  worker capabilities: ok");
+
+            if !options.kernel.is_file() {
+                let resolved = runner.require_readable_file("kernel", &options.kernel)?;
+                log::info!("  kernel validated: {resolved}");
+            }
+            if let Some(ref rootfs) = options.rootfs {
+                if !rootfs.is_file() {
+                    let resolved = runner.require_readable_file("rootfs", rootfs)?;
+                    log::info!("  rootfs validated: {resolved}");
+                }
+            }
+            if let Some(ref data) = options.data {
+                if !data.is_file() {
+                    let resolved = runner.require_readable_file("data", data)?;
+                    log::info!("  data validated: {resolved}");
+                }
+            }
+        } else {
+            log::info!("deploy: dry-run (no worker selected; remote checks skipped)");
+        }
+
         deploy_layout.remove()?;
         log::info!("deploy: dry-run for {app}");
         if let Some(rootfs) = &options.rootfs {

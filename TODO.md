@@ -14,16 +14,8 @@
 - [x] Phase 9: Lock Stability (PID+timestamp in lock files, stale detection, unlock shows lock info)
 - [x] Phase 10: Interrupted Deploy Recovery (stale Deploying auto-recovery, DeployCleanup drop-guard cleans remote TAP + runtime dir)
 - [x] Phase 11: Health Check (verified port reuse, configurable timeout, detailed error output)
-
-## Phase 12: State Consistency (`v ps`)
-
-- [x] Cross-reference local runtime state with actual remote VM state (ssh pid check, etc.)
-- [x] Warn on any mismatch
-
-## Phase 13: Dry-run Improvements
-
-- [ ] Pre-validate worker connectivity and TAP creation ability during dry-run
-- [ ] Verify kernel/rootfs/artifact existence during dry-run
+- [x] Phase 12: State Consistency (cross-reference local runtime state with actual remote VM state, warn on mismatch)
+- [x] Phase 13: Dry-run Improvements (pre-validate worker connectivity, TAP creation, kernel/rootfs/artifact existence)
 
 ## Phase 14: Test Coverage
 

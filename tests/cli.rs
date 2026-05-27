@@ -193,8 +193,12 @@ status_message = "booted"
 fn stub_commands_load_config_and_take_locks() {
     let project = initialized_project("deploy");
     add_worker_config(&project);
+    let fake_ssh = fake_ssh_bin(&project);
+    let fake_ssh_log = project.join("fake-ssh.log");
 
     let output = v_command(&project)
+        .env("V_SSH_BIN", &fake_ssh)
+        .env("V_FAKE_SSH_LOG", &fake_ssh_log)
         .args([
             "deploy",
             "web",
@@ -399,8 +403,12 @@ status = "starting"
 fn deploy_dry_run_shows_proxy_update() {
     let project = initialized_project("deploy-proxy-dry");
     add_worker_config_with_caddy(&project);
+    let fake_ssh = fake_ssh_bin(&project);
+    let fake_ssh_log = project.join("fake-ssh.log");
 
     let output = v_command(&project)
+        .env("V_SSH_BIN", &fake_ssh)
+        .env("V_FAKE_SSH_LOG", &fake_ssh_log)
         .args([
             "deploy",
             "web",
@@ -427,8 +435,12 @@ fn deploy_dry_run_shows_proxy_update() {
 fn deploy_dry_run_without_domain_shows_manual_proxy() {
     let project = initialized_project("deploy-nodomain-dry");
     add_worker_config_with_caddy(&project);
+    let fake_ssh = fake_ssh_bin(&project);
+    let fake_ssh_log = project.join("fake-ssh.log");
 
     let output = v_command(&project)
+        .env("V_SSH_BIN", &fake_ssh)
+        .env("V_FAKE_SSH_LOG", &fake_ssh_log)
         .args([
             "deploy",
             "web",
