@@ -403,7 +403,6 @@ impl SshRunner {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn remote_dir_exists(&self, path: &Path) -> Result<bool> {
         let path = path_to_remote_string(path)?;
         let output = self
@@ -411,6 +410,14 @@ impl SshRunner {
             .context(format!("failed to check remote directory {}", path))?;
         let stdout = String::from_utf8(output.stdout).context("ssh stdout is not utf-8")?;
         Ok(stdout.trim() == "exists")
+    }
+
+    pub fn check_remote_pid(&self, pid: u32) -> Result<bool> {
+        let output = self
+            .run_shell(&check_remote_pid_script(pid))
+            .context(format!("failed to check remote PID {pid}"))?;
+        let stdout = String::from_utf8(output.stdout).context("ssh stdout is not utf-8")?;
+        Ok(stdout.trim() == "running")
     }
 
     pub fn stream_shell(&self, script: &str) -> Result<()> {
@@ -818,11 +825,17 @@ fn check_caddy_script() -> String {
     ssh_script!("check_caddy.sh").to_string()
 }
 
-#[allow(dead_code)]
 fn check_remote_dir_exists_script(path: &str) -> String {
     render_ssh_script(
         ssh_script!("check_remote_dir_exists.sh"),
         &[("path", shell_quote(path))],
+    )
+}
+
+fn check_remote_pid_script(pid: u32) -> String {
+    render_ssh_script(
+        ssh_script!("check_remote_pid.sh"),
+        &[("pid", pid.to_string())],
     )
 }
 
@@ -1145,5 +1158,15 @@ mod tests {
         assert!(script.contains("[ -d \"$dir\" ]"));
         assert!(script.contains("printf 'exists\\n'"));
         assert!(script.contains("printf 'missing\\n'"));
+    }
+
+    #[test]
+    fn builds_remote_pid_check_script() {
+        let script = check_remote_pid_script(4242);
+
+        assert!(script.contains("pid=4242"));
+        assert!(script.contains("kill -0 \"$pid\""));
+        assert!(script.contains("printf 'running\\n'"));
+        assert!(script.contains("printf 'dead\\n'"));
     }
 }

@@ -282,6 +282,8 @@ status_message = "booted"
 fn ps_shows_runtime_state_for_apps() {
     let project = initialized_project("ps-runtime");
     add_worker_config(&project);
+    let fake_ssh = fake_ssh_bin(&project);
+    let fake_ssh_log = project.join("fake-ssh.log");
     let runtime_dir = project.join("runtime/v/web");
     fs::create_dir_all(runtime_dir.join("logs")).expect("create local runtime");
     fs::write(
@@ -311,12 +313,17 @@ status = "starting"
     )
     .expect("write api runtime state");
 
-    let output = v_command(&project).arg("ps").output().expect("run ps");
+    let output = v_command(&project)
+        .env("V_SSH_BIN", &fake_ssh)
+        .env("V_FAKE_SSH_LOG", &fake_ssh_log)
+        .arg("ps")
+        .output()
+        .expect("run ps");
 
     assert!(output.status.success(), "{output:?}");
     let stdout = stdout(&output);
     assert!(stdout.contains("api\tStarting\t-\t"));
-    assert!(stdout.contains("web\tRunning\tvps-prod\t4242\t/tmp/v-fake-runtime/web"));
+    assert!(stdout.contains("web\tRunning\tvps-prod\t4242\t/tmp/v-fake-runtime/web\tok"));
 
     fs::remove_dir_all(project).expect("remove temp project");
 }
@@ -1018,6 +1025,12 @@ case "$*" in
     ;;
   *"tap='"*)
     printf '%s\n' "tap-fake"
+    ;;
+  *"dir="*)
+    printf '%s\n' "exists"
+    ;;
+  *"kill -0"*)
+    printf '%s\n' "running"
     ;;
   *)
     :

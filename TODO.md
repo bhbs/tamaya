@@ -17,8 +17,8 @@
 
 ## Phase 12: State Consistency (`v ps`)
 
-- [ ] Cross-reference local runtime state with actual remote VM state (ssh pid check, etc.)
-- [ ] Warn on any mismatch
+- [x] Cross-reference local runtime state with actual remote VM state (ssh pid check, etc.)
+- [x] Warn on any mismatch
 
 ## Phase 13: Dry-run Improvements
 

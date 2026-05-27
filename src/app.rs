@@ -341,6 +341,7 @@ pub fn ps() -> Result<()> {
     let registry = Registry::load(&config.registry_file)?;
     let runtime_entries = crate::runtime::list_runtime_entries(&config.runtime_dir)?;
     let mut cleaned = 0u32;
+    let mut warnings: Vec<String> = Vec::new();
 
     if registry.apps.is_empty() && runtime_entries.is_empty() {
         log::info!("no apps");
@@ -356,6 +357,54 @@ pub fn ps() -> Result<()> {
             continue;
         }
 
+        let mut consistent = true;
+
+        if let (Some(worker_name), Some(_)) = (&state.worker, &state.pid) {
+            if let Ok((_, worker)) = config.worker(Some(worker_name)) {
+                let runner = SshRunner::new(worker.clone());
+
+                if let Some(remote_dir) = &state.remote_runtime_dir {
+                    match runner.remote_dir_exists(remote_dir) {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            consistent = false;
+                            warnings.push(format!(
+                                "{name}: remote runtime directory {} does not exist on worker {worker_name}",
+                                remote_dir.display()
+                            ));
+                        }
+                        Err(e) => {
+                            warnings.push(format!(
+                                "{name}: could not verify remote runtime dir on worker {worker_name}: {e:#}"
+                            ));
+                        }
+                    }
+                }
+
+                if let Some(pid) = state.pid {
+                    match runner.check_remote_pid(pid) {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            consistent = false;
+                            warnings.push(format!(
+                                "{name}: Firecracker process {pid} is not running on worker {worker_name}"
+                            ));
+                        }
+                        Err(e) => {
+                            warnings.push(format!(
+                                "{name}: could not verify remote PID {pid} on worker {worker_name}: {e:#}"
+                            ));
+                        }
+                    }
+                }
+            } else {
+                warnings.push(format!(
+                    "{name}: worker {:?} is not defined in config",
+                    state.worker.as_deref().unwrap_or("?")
+                ));
+            }
+        }
+
         let worker = state.worker.as_deref().unwrap_or("-");
         let pid = state
             .pid
@@ -366,7 +415,8 @@ pub fn ps() -> Result<()> {
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "-".to_string());
-        println!("{name}\t{:?}\t{worker}\t{pid}\t{runtime}", state.status);
+        let consistency = if consistent { "ok" } else { "MISMATCH" };
+        println!("{name}\t{:?}\t{worker}\t{pid}\t{runtime}\t{consistency}", state.status);
     }
 
     for (name, app) in &registry.apps {
@@ -375,10 +425,26 @@ pub fn ps() -> Result<()> {
         }
     }
 
+    for warning in &warnings {
+        log::warn!("{warning}");
+    }
+
     if cleaned > 0 {
         log::warn!(
             "cleaned up {cleaned} stale runtime entr{}",
             if cleaned == 1 { "y" } else { "ies" }
+        );
+    }
+
+    if !warnings.is_empty() {
+        log::warn!(
+            "found {} state {}",
+            warnings.len(),
+            if warnings.len() == 1 {
+                "inconsistency"
+            } else {
+                "inconsistencies"
+            }
         );
     }
 
