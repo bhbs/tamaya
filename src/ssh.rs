@@ -894,7 +894,7 @@ mod tests {
         assert!(script.contains("sudo install -m 0755"));
         assert!(script.contains("firecracker installed at $firecracker_bin"));
         assert!(script.contains("caddy_config_dir='/etc/caddy'"));
-        assert!(script.contains("sudo apt-get install -y -qq caddy"));
+        assert!(script.contains("install_packages caddy"));
         assert!(script.contains("caddy ready with config dir $caddy_config_dir"));
     }
 }

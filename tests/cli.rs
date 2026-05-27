@@ -604,7 +604,7 @@ fn setup_installs_caddy_on_worker() {
     assert!(stdout.contains("worker prerequisites: installed"));
 
     let ssh_log = fs::read_to_string(fake_ssh_log).expect("read fake ssh log");
-    assert!(ssh_log.contains("requested_firecracker_bin="));
+    assert!(ssh_log.contains("firecracker_bin="));
     assert!(ssh_log.contains("caddy_config_dir="));
     assert!(ssh_log.contains("sudo apt-get install"));
 
@@ -771,7 +771,7 @@ pid="${V_FAKE_FIRECRACKER_PID:-4242}"
 printf '%s\n' "$*" >> "$log"
 
 case "$*" in
-  *"requested_firecracker_bin="*)
+  *"firecracker_bin="*"caddy_config_dir="*)
     printf '%s\n' "install_worker_prerequisites"
     ;;
   *"destination="*"-kernel-vmlinux"*)

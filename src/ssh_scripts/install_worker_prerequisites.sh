@@ -1,34 +1,75 @@
 set -eu
-requested_firecracker_bin={{firecracker_bin}}
+firecracker_bin={{firecracker_bin}}
 caddy_config_dir={{caddy_config_dir}}
-case "$requested_firecracker_bin" in
-  */*) firecracker_bin="$requested_firecracker_bin" ;;
+
+install_packages() {
+  if command -v apt-get >/dev/null 2>&1; then
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq "$@"
+  elif command -v dnf >/dev/null 2>&1; then
+    packages=""
+    for package_name in "$@"; do
+      case "$package_name" in
+        iproute2) package_name="iproute" ;;
+      esac
+      packages="${packages:+$packages }$package_name"
+    done
+    sudo dnf install -y $packages
+  elif command -v yum >/dev/null 2>&1; then
+    packages=""
+    for package_name in "$@"; do
+      case "$package_name" in
+        iproute2) package_name="iproute" ;;
+      esac
+      packages="${packages:+$packages }$package_name"
+    done
+    sudo yum install -y $packages
+  else
+    echo "unsupported package manager; install missing packages manually: $*" >&2
+    exit 1
+  fi
+}
+
+missing_base_packages=""
+for command_name in curl ip iptables modprobe tar; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    case "$command_name" in
+      ip) package_name="iproute2" ;;
+      modprobe) package_name="kmod" ;;
+      *) package_name="$command_name" ;;
+    esac
+    missing_base_packages="${missing_base_packages:+$missing_base_packages }$package_name"
+  fi
+done
+
+if ! command -v update-ca-certificates >/dev/null 2>&1 && [ ! -d /etc/pki/ca-trust ]; then
+  missing_base_packages="${missing_base_packages:+$missing_base_packages }ca-certificates"
+fi
+
+if [ -n "$missing_base_packages" ]; then
+  install_packages $missing_base_packages
+fi
+
+case "$firecracker_bin" in
+  */*)
+    firecracker_installed=false
+    [ -x "$firecracker_bin" ] && firecracker_installed=true
+    ;;
   *)
-    if command -v "$requested_firecracker_bin" >/dev/null 2>&1; then
-      printf '%s\n' "firecracker already installed at $(command -v "$requested_firecracker_bin")"
-      firecracker_bin="$(command -v "$requested_firecracker_bin")"
+    if command -v "$firecracker_bin" >/dev/null 2>&1; then
+      firecracker_bin="$(command -v "$firecracker_bin")"
+      firecracker_installed=true
     else
-      firecracker_bin="/usr/local/bin/$requested_firecracker_bin"
+      firecracker_bin="/usr/local/bin/$firecracker_bin"
+      firecracker_installed=false
     fi
     ;;
 esac
 
-if command -v apt-get >/dev/null 2>&1; then
-  sudo apt-get update -qq
-  sudo apt-get install -y -qq ca-certificates curl iproute2 iptables kmod tar
-elif command -v dnf >/dev/null 2>&1; then
-  sudo dnf install -y ca-certificates curl iproute iptables kmod tar
-elif command -v yum >/dev/null 2>&1; then
-  sudo yum install -y ca-certificates curl iproute iptables kmod tar
-else
-  echo "unsupported package manager; install ca-certificates curl iproute2/iproute iptables kmod tar manually" >&2
-  exit 1
-fi
-
 sudo modprobe kvm 2>/dev/null || true
 sudo modprobe kvm_intel 2>/dev/null || sudo modprobe kvm_amd 2>/dev/null || true
 
-if [ -x "$firecracker_bin" ]; then
+if [ "$firecracker_installed" = true ]; then
   printf '%s\n' "firecracker already installed at $firecracker_bin"
 else
 
@@ -65,26 +106,25 @@ else
   printf '%s\n' "firecracker installed at $firecracker_bin"
 fi
 
-if [ -n "$caddy_config_dir" ]; then
-  if command -v caddy >/dev/null 2>&1; then
-    printf '%s\n' "caddy already installed"
+if command -v caddy >/dev/null 2>&1; then
+  printf '%s\n' "caddy already installed"
+else
+  if command -v apt-get >/dev/null 2>&1; then
+    install_packages debian-keyring debian-archive-keyring apt-transport-https gnupg
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+      | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+      | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+    install_packages caddy
+  elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
+    install_packages caddy
   else
-    if command -v apt-get >/dev/null 2>&1; then
-      sudo apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https gnupg
-      curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
-        | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-      curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
-        | sudo tee /etc/apt/sources.list.d/caddy-stable.list
-      sudo apt-get update -qq
-      sudo apt-get install -y -qq caddy
-    else
-      echo "Caddy auto-install currently requires apt-get; install caddy manually for this distribution" >&2
-      exit 1
-    fi
+    echo "unsupported package manager; install caddy manually" >&2
+    exit 1
   fi
-
-  sudo mkdir -p "$caddy_config_dir"
-  sudo systemctl enable caddy
-  sudo systemctl start caddy
-  printf '%s\n' "caddy ready with config dir $caddy_config_dir"
 fi
+
+sudo mkdir -p "$caddy_config_dir"
+sudo systemctl enable caddy
+sudo systemctl start caddy
+printf '%s\n' "caddy ready with config dir $caddy_config_dir"
