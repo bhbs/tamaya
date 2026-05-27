@@ -5,6 +5,7 @@ mod config;
 mod firecracker;
 mod lock;
 mod log;
+mod progress;
 mod registry;
 mod runtime;
 mod ssh;

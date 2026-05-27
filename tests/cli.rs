@@ -177,7 +177,7 @@ status_message = "booted"
         .expect("stop app");
 
     assert!(stop.status.success(), "{stop:?}");
-    assert!(stdout(&stop).contains("stop: stopped web pid 4242"));
+    assert!(stdout(&stop).contains(" stopped web pid 4242"));
     assert!(!runtime_dir.exists());
 
     let ssh_log = fs::read_to_string(fake_ssh_log).expect("read fake ssh log");
@@ -240,7 +240,7 @@ fn logs_reports_when_app_not_running() {
         .expect("run logs");
 
     assert!(output.status.success(), "{output:?}");
-    assert!(stdout(&output).contains("logs: web is not running"));
+    assert!(stdout(&output).contains(" is not running"));
 
     fs::remove_dir_all(project).expect("remove temp project");
 }
@@ -562,7 +562,7 @@ status = "running"
     assert!(output.status.success(), "{output:?}");
     let stdout = stdout(&output);
     assert!(stdout.contains("previous deploy was interrupted; resetting status and retrying"));
-    assert!(stdout.contains("deploy: dry-run for web"));
+    assert!(stdout.contains("dry-run for web"));
 
     let registry =
         fs::read_to_string(project.join(".local/state/v/registry.toml")).expect("read registry");
@@ -669,7 +669,7 @@ status = "stopped"
     assert!(output.status.success(), "{output:?}");
     let stdout = stdout(&output);
     assert!(stdout.contains("cleaning up stale deploy resources"));
-    assert!(stdout.contains("deploy: dry-run for web"));
+    assert!(stdout.contains("dry-run for web"));
     assert!(!project.join("runtime/v/web-deploy").exists());
 
     fs::remove_dir_all(project).expect("remove temp project");
@@ -702,7 +702,6 @@ fn deploy_with_fake_ssh_updates_caddy_and_reloads() {
 
     assert!(output.status.success(), "{output:?}");
     let stdout = stdout(&output);
-    assert!(stdout.contains("updating reverse proxy web.example.com → 10.0.0.2:8080"));
     assert!(stdout.contains("Caddy reloaded"));
 
     let ssh_log = fs::read_to_string(fake_ssh_log).expect("read fake ssh log");
@@ -748,7 +747,6 @@ fn deploy_artifact_materializes_rootfs_and_attaches_data_on_worker() {
     assert!(output.status.success(), "{output:?}");
     let stdout = stdout(&output);
     assert!(stdout.contains("uploading artifact"));
-    assert!(stdout.contains("materializing rootfs.ext4 and data.ext4 on worker"));
     assert!(stdout.contains("worker rootfs /tmp/v-fake-apps/web/rootfs.ext4"));
     assert!(stdout.contains("worker data /tmp/v-fake-apps/web/data.ext4"));
 
@@ -777,7 +775,7 @@ fn setup_installs_caddy_on_worker() {
 
     assert!(output.status.success(), "{output:?}");
     let stdout = stdout(&output);
-    assert!(stdout.contains("worker prerequisites: installed"));
+    assert!(stdout.contains("prerequisites: installed"));
 
     let ssh_log = fs::read_to_string(fake_ssh_log).expect("read fake ssh log");
     assert!(ssh_log.contains("firecracker_bin="));
@@ -803,10 +801,10 @@ fn cleanup_removes_stale_taps_on_worker() {
 
     assert!(output.status.success(), "{output:?}");
     let stdout = stdout(&output);
-    assert!(stdout.contains("cleanup: worker vps-prod"));
-    assert!(stdout.contains("cleanup: removed TAP t-stale"));
-    assert!(stdout.contains("cleanup: removed TAP web-deploy"));
-    assert!(stdout.contains("cleanup: removed 2 stale TAP interfaces"));
+    assert!(stdout.contains("worker vps-prod"));
+    assert!(stdout.contains("removed TAP t-stale"));
+    assert!(stdout.contains("removed TAP web-deploy"));
+    assert!(stdout.contains("removed 2 stale TAP interfaces"));
 
     let ssh_log = fs::read_to_string(fake_ssh_log).expect("read fake ssh log");
     assert!(ssh_log.contains("ip tuntap show"));
@@ -844,7 +842,7 @@ status = "starting"
 
     assert!(output.status.success(), "{output:?}");
     let stdout = stdout(&output);
-    assert!(stdout.contains("cleanup: worker vps-prod"));
+    assert!(stdout.contains("worker vps-prod"));
     assert!(!stdout.contains("t-deploy-in-progress"));
 
     let ssh_log = fs::read_to_string(fake_ssh_log).expect("read fake ssh log");

@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::lock::{LockFile, app_lock_name, volume_lock_name};
+use crate::progress;
 use crate::registry::{App, AppStatus, Registry};
 use crate::ssh::validate_remote_name;
 use anyhow::{Context, Result, bail};
@@ -60,7 +61,7 @@ pub fn build(options: BuildOptions) -> Result<()> {
 
     print_plan(&options, &layout, &image_tag);
     if options.dry_run {
-        log::info!("build: dry-run; no Docker or filesystem commands were run");
+        log::info!(target: "build", "dry-run; no Docker or filesystem commands were run");
         return Ok(());
     }
 
@@ -131,9 +132,9 @@ pub fn build(options: BuildOptions) -> Result<()> {
     );
     registry.save(&config.registry_file)?;
 
-    log::info!("build: wrote {}", layout.artifact.display());
-    log::info!("build: wrote {}", layout.config.display());
-    log::info!("build: wrote {}", layout.metadata.display());
+    log::info!(target: "build", "wrote {}", layout.artifact.display());
+    log::info!(target: "build", "wrote {}", layout.config.display());
+    log::info!(target: "build", "wrote {}", layout.metadata.display());
 
     Ok(())
 }
@@ -160,7 +161,8 @@ struct DockerContainer {
 
 impl DockerContainer {
     fn create(image_tag: &str, options: &BuildOptions) -> Result<Self> {
-        run_status(
+        let spinner = progress::spinner(&format!("building image {image_tag}..."));
+        let result = run_status(
             Command::new("docker")
                 .arg("build")
                 .arg("--platform")
@@ -171,7 +173,9 @@ impl DockerContainer {
                 .arg(&options.dockerfile)
                 .arg(&options.context),
             "docker build",
-        )?;
+        );
+        spinner.finish_and_clear();
+        result?;
 
         let output = Command::new("docker")
             .arg("create")
@@ -244,17 +248,17 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 }
 
 fn print_plan(options: &BuildOptions, layout: &BuildLayout, image_tag: &str) {
-    log::info!("build: {}", options.app);
-    log::info!("  app dir: {}", layout.app_dir.display());
-    log::info!("  docker context: {}", options.context.display());
-    log::info!("  dockerfile: {}", options.dockerfile.display());
-    log::info!("  image tag: {image_tag}");
-    log::info!("  platform: {DOCKER_PLATFORM}");
-    log::info!("  artifact: {}", layout.artifact.display());
-    log::info!("  config: {}", layout.config.display());
-    log::info!("  metadata: {}", layout.metadata.display());
-    log::info!("  port: {APP_PORT}");
-    log::info!("  init: {INIT_PATH}");
+    log::info!(target: "build", "{}", options.app);
+    log::info!(target: "build", "  app dir: {}", layout.app_dir.display());
+    log::info!(target: "build", "  docker context: {}", options.context.display());
+    log::info!(target: "build", "  dockerfile: {}", options.dockerfile.display());
+    log::info!(target: "build", "  image tag: {image_tag}");
+    log::info!(target: "build", "  platform: {DOCKER_PLATFORM}");
+    log::info!(target: "build", "  artifact: {}", layout.artifact.display());
+    log::info!(target: "build", "  config: {}", layout.config.display());
+    log::info!(target: "build", "  metadata: {}", layout.metadata.display());
+    log::info!(target: "build", "  port: {APP_PORT}");
+    log::info!(target: "build", "  init: {INIT_PATH}");
 }
 
 fn now_unix_secs() -> u64 {

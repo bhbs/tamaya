@@ -1,5 +1,6 @@
 use crate::config::WorkerConfig;
 use crate::firecracker::UnixHttpRequest;
+use crate::progress::{self, ProgressReader};
 use anyhow::{Context, Result, bail};
 use std::ffi::OsString;
 use std::fs::File;
@@ -117,10 +118,18 @@ impl SshRunner {
             .context("local boot file must have a UTF-8 file name")?;
         validate_remote_name("filename", filename)?;
 
-        let mut local_file = File::open(local_path).context(format!(
+        let pb = {
+            let meta = std::fs::metadata(local_path).ok();
+            meta.map(|m| progress::upload_bar(m.len()))
+        };
+        let local_file = File::open(local_path).context(format!(
             "failed to open local boot file {}",
             local_path.display()
         ))?;
+        let mut reader: Box<dyn io::Read> = match pb {
+            Some(ref pb) => Box::new(ProgressReader::new(local_file, pb.clone())),
+            None => Box::new(local_file),
+        };
         let mut child = self
             .shell_command(&upload_boot_file_script(app, kind, filename))
             .stdin(Stdio::piped())
@@ -131,10 +140,13 @@ impl SshRunner {
 
         {
             let mut stdin = child.stdin.take().context("failed to open ssh stdin")?;
-            io::copy(&mut local_file, &mut stdin).context(format!(
+            io::copy(&mut reader, &mut stdin).context(format!(
                 "failed to stream local boot file {}",
                 local_path.display()
             ))?;
+        }
+        if let Some(pb) = pb {
+            pb.finish_and_clear();
         }
 
         let output = child
@@ -160,8 +172,16 @@ impl SshRunner {
 
     pub fn upload_artifact_tar(&self, app: &str, local_path: &Path) -> Result<String> {
         validate_remote_name("app", app)?;
-        let mut local_file = File::open(local_path)
+        let pb = {
+            let meta = std::fs::metadata(local_path).ok();
+            meta.map(|m| progress::upload_bar(m.len()))
+        };
+        let local_file = File::open(local_path)
             .context(format!("failed to open artifact {}", local_path.display()))?;
+        let mut reader: Box<dyn io::Read> = match pb {
+            Some(ref pb) => Box::new(ProgressReader::new(local_file, pb.clone())),
+            None => Box::new(local_file),
+        };
         let mut child = self
             .shell_command(&upload_artifact_tar_script(app))
             .stdin(Stdio::piped())
@@ -172,10 +192,13 @@ impl SshRunner {
 
         {
             let mut stdin = child.stdin.take().context("failed to open ssh stdin")?;
-            io::copy(&mut local_file, &mut stdin).context(format!(
+            io::copy(&mut reader, &mut stdin).context(format!(
                 "failed to stream artifact {}",
                 local_path.display()
             ))?;
+        }
+        if let Some(pb) = pb {
+            pb.finish_and_clear();
         }
 
         let output = child
