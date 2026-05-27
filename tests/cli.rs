@@ -736,6 +736,48 @@ fn cleanup_removes_stale_taps_on_worker() {
 }
 
 #[test]
+fn cleanup_preserves_deploy_runtime_state_taps() {
+    let project = initialized_project("cleanup-deploy-preserve");
+    add_worker_config(&project);
+
+    fs::create_dir_all(project.join("runtime/v/web-deploy")).expect("create deploy runtime");
+    fs::write(
+        project.join("runtime/v/web-deploy/state.toml"),
+        r#"app = "web-deploy"
+api_socket = "/run/user/0/v/web-deploy/firecracker.sock"
+worker = "vps-prod"
+tap = "t-deploy-in-progress"
+status = "starting"
+"#,
+    )
+    .expect("write deploy runtime state");
+
+    let fake_ssh = fake_ssh_bin(&project);
+    let fake_ssh_log = project.join("fake-ssh.log");
+
+    let output = v_command(&project)
+        .env("V_SSH_BIN", &fake_ssh)
+        .env("V_FAKE_SSH_LOG", &fake_ssh_log)
+        .args(["cleanup", "--worker", "vps-prod", "--stale-taps"])
+        .output()
+        .expect("run cleanup");
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = stdout(&output);
+    assert!(stdout.contains("cleanup: worker vps-prod"));
+    assert!(!stdout.contains("t-deploy-in-progress"));
+
+    let ssh_log = fs::read_to_string(fake_ssh_log).expect("read fake ssh log");
+    assert!(ssh_log.contains("t-deploy-in-progress"));
+    assert!(
+        ssh_log.contains("ip tuntap show"),
+        "SSH log should contain stale TAP cleanup commands:\n{ssh_log}"
+    );
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
+#[test]
 fn check_with_caddy_config_detects_caddy() {
     let project = initialized_project("check-caddy");
     add_worker_config_with_caddy(&project);

@@ -9,12 +9,7 @@
 - [x] Phase 4: Blue-green deploy with health check + Caddy proxy switch + drain
 - [x] Phase 5: Image build (Docker export → tar artifact)
 - [x] Phase 6: Logging (unified format with timestamps/levels, deploy step logging, worker-aware SSH errors)
-
-## Phase 7: TAP Management
-
-- [ ] Ensure `deploy_tap` (t-XXXXXXXX) is cleaned up on deploy failure
-- [ ] Make `deploy_tap` name sufficiently unique across concurrent deploys
-- [ ] Include `{app}-deploy` runtime state in stale TAP detection (`v cleanup`)
+- [x] Phase 7: TAP Management
 
 ## Phase 8: Runtime Directory Stability
 

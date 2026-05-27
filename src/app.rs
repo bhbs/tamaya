@@ -78,6 +78,7 @@ struct DeployCleanup {
     deploy_layout: Option<RuntimeLayout>,
     worker: Option<WorkerConfig>,
     ctx: Option<VmBootContext>,
+    deploy_tap: Option<String>,
     old_registry_status: AppStatus,
     registry_file: PathBuf,
     app: String,
@@ -94,6 +95,7 @@ impl DeployCleanup {
             deploy_layout: Some(deploy_layout),
             worker: None,
             ctx: None,
+            deploy_tap: None,
             old_registry_status,
             registry_file,
             app,
@@ -108,20 +110,29 @@ impl DeployCleanup {
         self.ctx = Some(ctx);
     }
 
+    fn set_deploy_tap(&mut self, tap: String) {
+        self.deploy_tap = Some(tap);
+    }
+
     fn disarm(&mut self) {
         self.deploy_layout = None;
         self.worker = None;
         self.ctx = None;
+        self.deploy_tap = None;
     }
 }
 
 impl Drop for DeployCleanup {
     fn drop(&mut self) {
-        if let Some(ctx) = self.ctx.take()
-            && let Some(worker) = self.worker.take()
-        {
-            let runner = SshRunner::new(worker);
-            let _ = runner.stop_firecracker(ctx.pid, &ctx.remote_runtime_dir);
+        if let Some(worker) = self.worker.clone() {
+            if let Some(ctx) = self.ctx.take() {
+                let runner = SshRunner::new(worker.clone());
+                let _ = runner.stop_firecracker(ctx.pid, &ctx.remote_runtime_dir);
+            }
+            if let Some(tap) = self.deploy_tap.take() {
+                let runner = SshRunner::new(worker);
+                let _ = runner.delete_tap_interface(&tap);
+            }
         }
         if let Some(layout) = self.deploy_layout.take() {
             let _ = layout.remove();
@@ -646,13 +657,14 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
     let worker_name = worker_name.to_string();
     let firecracker_bin = options.firecracker_bin.to_string_lossy().to_string();
     let deploy_tap = format!(
-        "t-{ts:08x}",
+        "t-{ts:012x}",
         ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs()
-            % 0xffffffff,
+            .as_nanos()
+            % 0xffffffffffff,
     );
+    cleanup.set_deploy_tap(deploy_tap.clone());
 
     let mut materialized_data: Option<PathBuf> = None;
     let rootfs = if let Some(rootfs) = &options.rootfs {
