@@ -416,7 +416,10 @@ pub fn ps() -> Result<()> {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "-".to_string());
         let consistency = if consistent { "ok" } else { "MISMATCH" };
-        println!("{name}\t{:?}\t{worker}\t{pid}\t{runtime}\t{consistency}", state.status);
+        println!(
+            "{name}\t{:?}\t{worker}\t{pid}\t{runtime}\t{consistency}",
+            state.status
+        );
     }
 
     for (name, app) in &registry.apps {
@@ -709,29 +712,28 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
     let has_old_vm = old_state.is_some();
 
     if options.dry_run {
-        if let Some(artifact) = &options.artifact {
-            if !artifact.is_file() {
-                bail!(
-                    "local artifact file does not exist: {}",
-                    artifact.display()
-                );
-            }
+        if let Some(artifact) = &options.artifact
+            && !artifact.is_file()
+        {
+            bail!("local artifact file does not exist: {}", artifact.display());
         }
-        if let Some(rootfs) = &options.rootfs {
-            if !rootfs.is_file() && !is_remote_boot_path(rootfs) {
-                bail!(
-                    "local rootfs file does not exist: {}; pass an existing local file or a worker-side absolute/XDG path",
-                    rootfs.display()
-                );
-            }
+        if let Some(rootfs) = &options.rootfs
+            && !rootfs.is_file()
+            && !is_remote_boot_path(rootfs)
+        {
+            bail!(
+                "local rootfs file does not exist: {}; pass an existing local file or a worker-side absolute/XDG path",
+                rootfs.display()
+            );
         }
-        if let Some(data) = &options.data {
-            if !data.is_file() && !is_remote_boot_path(data) {
-                bail!(
-                    "local data file does not exist: {}; pass an existing local file or a worker-side absolute/XDG path",
-                    data.display()
-                );
-            }
+        if let Some(data) = &options.data
+            && !data.is_file()
+            && !is_remote_boot_path(data)
+        {
+            bail!(
+                "local data file does not exist: {}; pass an existing local file or a worker-side absolute/XDG path",
+                data.display()
+            );
         }
         if !options.kernel.is_file() && !is_remote_boot_path(&options.kernel) {
             bail!(
@@ -744,7 +746,10 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
             resolve_worker(&config, options.worker.as_deref(), true)?
         {
             let runner = SshRunner::new(worker.clone());
-            log::info!("deploy: dry-run worker: {worker_name} ({})", worker.ssh_target());
+            log::info!(
+                "deploy: dry-run worker: {worker_name} ({})",
+                worker.ssh_target()
+            );
             runner.check_capabilities()?;
             log::info!("  worker capabilities: ok");
 
@@ -752,17 +757,17 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
                 let resolved = runner.require_readable_file("kernel", &options.kernel)?;
                 log::info!("  kernel validated: {resolved}");
             }
-            if let Some(ref rootfs) = options.rootfs {
-                if !rootfs.is_file() {
-                    let resolved = runner.require_readable_file("rootfs", rootfs)?;
-                    log::info!("  rootfs validated: {resolved}");
-                }
+            if let Some(ref rootfs) = options.rootfs
+                && !rootfs.is_file()
+            {
+                let resolved = runner.require_readable_file("rootfs", rootfs)?;
+                log::info!("  rootfs validated: {resolved}");
             }
-            if let Some(ref data) = options.data {
-                if !data.is_file() {
-                    let resolved = runner.require_readable_file("data", data)?;
-                    log::info!("  data validated: {resolved}");
-                }
+            if let Some(ref data) = options.data
+                && !data.is_file()
+            {
+                let resolved = runner.require_readable_file("data", data)?;
+                log::info!("  data validated: {resolved}");
             }
         } else {
             log::info!("deploy: dry-run (no worker selected; remote checks skipped)");
