@@ -45,7 +45,11 @@ pub struct DeployOptions {
     pub app: String,
     pub worker: Option<String>,
     pub kernel: PathBuf,
-    pub rootfs: PathBuf,
+    pub rootfs: Option<PathBuf>,
+    pub artifact: Option<PathBuf>,
+    pub data: Option<PathBuf>,
+    pub rootfs_size_mib: u64,
+    pub data_size_mib: u64,
     pub firecracker_bin: PathBuf,
     pub tap: String,
     pub boot_args: String,
@@ -136,6 +140,7 @@ impl Drop for DeployCleanup {
 struct VmBootParams<'a> {
     kernel: &'a Path,
     rootfs: &'a Path,
+    data: Option<&'a Path>,
     firecracker_bin: &'a str,
     tap: &'a str,
     boot_args: &'a str,
@@ -155,6 +160,10 @@ fn boot_vm_on_worker(
     runner.check_capabilities()?;
     let kernel = prepare_boot_file(&runner, app, "kernel", params.kernel)?;
     let rootfs = prepare_boot_file(&runner, app, "rootfs", params.rootfs)?;
+    let data = params
+        .data
+        .map(|data| prepare_boot_file(&runner, app, "data", data))
+        .transpose()?;
     runner.ensure_tap_interface(params.tap)?;
 
     let api_socket_path = Path::new(&remote_runtime).join("firecracker.sock");
@@ -164,6 +173,7 @@ fn boot_vm_on_worker(
         machine_config: MachineConfig::new(params.vcpu, params.memory_mib)?,
         boot_source: BootSource::new(kernel, params.boot_args)?,
         rootfs: Drive::rootfs(rootfs, true)?,
+        data_drive: data.map(Drive::data).transpose()?,
         network_interface: NetworkInterface::new("eth0", params.tap, None)?,
     };
     let requests = client.build_boot_requests(&plan)?;
@@ -185,6 +195,9 @@ fn boot_vm_on_worker(
     println!("api socket: {}", client.api_socket_path().display());
     println!("kernel: {}", plan.boot_source.kernel_image_path.display());
     println!("rootfs: {}", plan.rootfs.path_on_host.display());
+    if let Some(data_drive) = &plan.data_drive {
+        println!("data: {}", data_drive.path_on_host.display());
+    }
     for request in &requests {
         println!("{} {}", request.method, request.path);
     }
@@ -475,6 +488,15 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
     let config = load_config()?;
     let app = options.app.as_str();
     validate_remote_name("app", app)?;
+    if options.rootfs.is_some() == options.artifact.is_some() {
+        bail!("pass exactly one of --rootfs or --artifact");
+    }
+    if options.rootfs_size_mib == 0 {
+        bail!("rootfs-size-mib must be greater than zero");
+    }
+    if options.data_size_mib == 0 {
+        bail!("data-size-mib must be greater than zero");
+    }
 
     let app_lock =
         LockFile::acquire(&config.locks_dir, &app_lock_name(app)).with_context(|| {
@@ -550,7 +572,24 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
     if options.dry_run {
         deploy_layout.remove()?;
         println!("deploy: dry-run for {app}");
-        println!("  new rootfs: {}", options.rootfs.display());
+        if let Some(rootfs) = &options.rootfs {
+            println!("  new rootfs: {}", rootfs.display());
+        }
+        if let Some(artifact) = &options.artifact {
+            println!("  artifact: {}", artifact.display());
+            println!("  would upload artifact to worker");
+            println!(
+                "  would materialize rootfs.ext4 on worker ({} MiB)",
+                options.rootfs_size_mib
+            );
+            println!(
+                "  would ensure data.ext4 on worker ({} MiB)",
+                options.data_size_mib
+            );
+        }
+        if let Some(data) = &options.data {
+            println!("  data: {}", data.display());
+        }
         println!("  kernel: {}", options.kernel.display());
         println!("  tap: {}", options.tap);
         println!("  vcpu: {}", options.vcpu);
@@ -610,11 +649,55 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
             % 0xffffffff,
     );
 
+    let mut materialized_data: Option<PathBuf> = None;
+    let rootfs = if let Some(rootfs) = &options.rootfs {
+        rootfs.clone()
+    } else {
+        let artifact = options
+            .artifact
+            .as_ref()
+            .context("artifact is required when rootfs is not set")?;
+        println!("deploy: uploading artifact for {app}");
+        let runner = SshRunner::new(worker.clone());
+        let remote_artifact = if artifact.is_file() {
+            runner
+                .upload_artifact_tar(app, artifact)
+                .context(format!("failed to upload artifact {}", artifact.display()))?
+        } else if is_remote_boot_path(artifact) {
+            runner
+                .require_readable_file("artifact", artifact)
+                .context(format!(
+                    "failed to validate remote artifact {}",
+                    artifact.display()
+                ))?
+        } else {
+            bail!(
+                "local artifact file does not exist: {}; pass an existing local file or a worker-side absolute/XDG path",
+                artifact.display()
+            );
+        };
+        println!("deploy: materializing rootfs.ext4 and data.ext4 on worker");
+        let artifact = runner.materialize_rootfs_from_artifact(
+            app,
+            Path::new(&remote_artifact),
+            options.rootfs_size_mib,
+            options.data_size_mib,
+            old_port,
+            "/sbin/init",
+        )?;
+        println!("deploy: worker rootfs {}", artifact.rootfs.display());
+        println!("deploy: worker data {}", artifact.data.display());
+        materialized_data = Some(artifact.data);
+        artifact.rootfs
+    };
+    let data = options.data.clone().or(materialized_data);
+
     println!("deploy: booting new VM for {app}");
 
     let params = VmBootParams {
         kernel: &options.kernel,
-        rootfs: &options.rootfs,
+        rootfs: &rootfs,
+        data: data.as_deref(),
         firecracker_bin: &firecracker_bin,
         tap: &deploy_tap,
         boot_args: &options.boot_args,
@@ -667,6 +750,11 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
         }
     }
     if !health_ok {
+        println!("deploy: health check failed; remote VM logs follow");
+        let runner = SshRunner::new(worker.clone());
+        if let Err(e) = runner.stream_logs(&ctx.remote_runtime_dir.join("logs")) {
+            println!("deploy: failed to read remote VM logs: {e:#}");
+        }
         bail!(
             "deploy: health check failed after {} retries",
             options.health_check_retries
@@ -781,7 +869,10 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
         .and_then(|entry| entry.current_image.clone());
     registry.apps.entry(app.to_string()).and_modify(|entry| {
         entry.previous_image = old_current;
-        entry.current_image = Some(options.rootfs.clone());
+        entry.current_image = Some(rootfs.clone());
+        if let Some(data) = data.clone() {
+            entry.volume_path = data;
+        }
         entry.status = AppStatus::Running;
     });
     registry.save(&config.registry_file)?;

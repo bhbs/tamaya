@@ -445,6 +445,63 @@ fn deploy_dry_run_without_domain_shows_manual_proxy() {
 }
 
 #[test]
+fn build_dry_run_reports_planned_app_paths_without_external_tools() {
+    let project = initialized_project("build-dry");
+    let context = project.join("app-src");
+    let dockerfile = context.join("Dockerfile");
+    fs::create_dir_all(&context).expect("create app context");
+    fs::write(&dockerfile, "FROM debian:bookworm-slim\n").expect("write Dockerfile");
+
+    let fake_bin = project.join("fake-bin");
+    fs::create_dir_all(&fake_bin).expect("create fake bin");
+    let external_tool_log = project.join("external-tools.log");
+    for tool in ["docker", "mkfs.ext4", "mkfs"] {
+        let shim = fake_bin.join(tool);
+        fs::write(
+            &shim,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"{tool} $*\" >> \"{}\"\nexit 99\n",
+                external_tool_log.display()
+            ),
+        )
+        .expect("write external tool shim");
+        let mut permissions = fs::metadata(&shim)
+            .expect("read shim metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&shim, permissions).expect("chmod shim");
+    }
+
+    let output = v_command(&project)
+        .env("PATH", &fake_bin)
+        .args(["build", "web", "--context"])
+        .arg(&context)
+        .args(["--dockerfile"])
+        .arg(&dockerfile)
+        .arg("--dry-run")
+        .output()
+        .expect("run build dry-run");
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        !external_tool_log.exists(),
+        "dry-run should not call docker or mkfs"
+    );
+
+    let stdout = stdout(&output);
+    for expected in [
+        ".local/share/v/apps/web",
+        ".local/share/v/apps/web/artifact.tar",
+        ".local/share/v/apps/web/config.json",
+        ".local/share/v/apps/web/metadata.json",
+    ] {
+        assert!(stdout.contains(expected), "missing {expected} in {stdout}");
+    }
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
+#[test]
 fn deploy_recovers_stale_deploying_registry_with_running_runtime() {
     let project = initialized_project("deploy-stale-registry");
     fs::write(
@@ -581,6 +638,45 @@ fn deploy_with_fake_ssh_updates_caddy_and_reloads() {
     assert!(state.contains("api_socket = \"/tmp/v-fake-runtime/web/firecracker.sock\""));
     assert!(state.contains("remote_runtime_dir = \"/tmp/v-fake-runtime/web\""));
     assert!(!project.join("runtime/v/web-deploy").exists());
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
+#[test]
+fn deploy_artifact_materializes_rootfs_and_attaches_data_on_worker() {
+    let project = initialized_project("deploy-artifact");
+    add_worker_config(&project);
+    let local_kernel = project.join("vmlinux");
+    let local_artifact = project.join("artifact.tar");
+    fs::write(&local_kernel, "kernel").expect("write local kernel");
+    fs::write(&local_artifact, "artifact").expect("write local artifact");
+    let fake_ssh = fake_ssh_bin(&project);
+    let fake_ssh_log = project.join("fake-ssh.log");
+
+    let output = v_command(&project)
+        .env("V_SSH_BIN", &fake_ssh)
+        .env("V_FAKE_SSH_LOG", &fake_ssh_log)
+        .env("V_FAKE_REMOTE_RUNTIME", "/tmp/v-fake-runtime/web-deploy")
+        .args(["deploy", "web", "--worker", "vps-prod", "--kernel"])
+        .arg(&local_kernel)
+        .args(["--artifact"])
+        .arg(&local_artifact)
+        .args(["--skip-health-check"])
+        .output()
+        .expect("run artifact deploy");
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = stdout(&output);
+    assert!(stdout.contains("uploading artifact"));
+    assert!(stdout.contains("materializing rootfs.ext4 and data.ext4 on worker"));
+    assert!(stdout.contains("worker rootfs /tmp/v-fake-apps/web/rootfs.ext4"));
+    assert!(stdout.contains("worker data /tmp/v-fake-apps/web/data.ext4"));
+
+    let ssh_log = fs::read_to_string(fake_ssh_log).expect("read fake ssh log");
+    assert!(ssh_log.contains("artifact_dir="));
+    assert!(ssh_log.contains("rootfs_size_mib=1024"));
+    assert!(ssh_log.contains("/drives/data"));
+    assert!(ssh_log.contains("\"drive_id\":\"data\""));
 
     fs::remove_dir_all(project).expect("remove temp project");
 }
@@ -782,6 +878,16 @@ case "$*" in
     cat >/dev/null
     printf '%s\n' "/tmp/v-fake-images/web-rootfs-rootfs.ext4"
     ;;
+  *"artifact_dir="*"artifact.tar"*)
+    cat >/dev/null
+    printf '%s\n' "/tmp/v-fake-artifacts/web/artifact.tar"
+    ;;
+  *"rootfs_size_mib="*"mkfs_bin="*)
+    printf '%s\n' "/tmp/v-fake-apps/web/rootfs.ext4"
+    printf '%s\n' "/tmp/v-fake-apps/web/data.ext4"
+    printf '%s\n' "/tmp/v-fake-apps/web/config.json"
+    printf '%s\n' "/tmp/v-fake-apps/web/metadata.json"
+    ;;
   *"--api-sock"* | *"/machine-config"* | *"/actions"*)
     printf '%s\n' "$pid"
     ;;
@@ -793,6 +899,9 @@ case "$*" in
     ;;
   *"name='\"'\"'rootfs'\"'\"'"*)
     printf '%s\n' "/images/web.ext4"
+    ;;
+  *"name='\"'\"'data'\"'\"'"*)
+    printf '%s\n' "/tmp/v-fake-apps/web/data.ext4"
     ;;
   *"tap='\"'\"'tap0'\"'\"'"*)
     printf '%s\n' "tap0"

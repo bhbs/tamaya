@@ -31,11 +31,12 @@ install_packages() {
 }
 
 missing_base_packages=""
-for command_name in curl ip iptables modprobe tar; do
+for command_name in curl ip iptables modprobe tar truncate mkfs.ext4; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     case "$command_name" in
       ip) package_name="iproute2" ;;
       modprobe) package_name="kmod" ;;
+      mkfs.ext4) package_name="e2fsprogs" ;;
       *) package_name="$command_name" ;;
     esac
     missing_base_packages="${missing_base_packages:+$missing_base_packages }$package_name"

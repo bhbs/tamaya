@@ -1,4 +1,5 @@
 mod app;
+mod builder;
 mod cli;
 mod config;
 mod firecracker;
@@ -16,6 +17,19 @@ fn main() -> Result<()> {
 
     match cli.command {
         Command::Init => app::init(),
+        Command::Build {
+            app,
+            context,
+            dockerfile,
+            artifact,
+            dry_run,
+        } => builder::build(builder::BuildOptions {
+            app,
+            context,
+            dockerfile,
+            artifact,
+            dry_run,
+        }),
         Command::Check {
             app,
             worker,
@@ -45,6 +59,10 @@ fn main() -> Result<()> {
             worker,
             kernel,
             rootfs,
+            artifact,
+            data,
+            rootfs_size_mib,
+            data_size_mib,
             firecracker_bin,
             tap,
             boot_args,
@@ -63,6 +81,10 @@ fn main() -> Result<()> {
             worker,
             kernel,
             rootfs,
+            artifact,
+            data,
+            rootfs_size_mib,
+            data_size_mib,
             firecracker_bin,
             tap,
             boot_args,

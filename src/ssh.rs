@@ -12,6 +12,14 @@ pub struct SshRunner {
     worker: WorkerConfig,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct RemoteBuildArtifact {
+    pub rootfs: std::path::PathBuf,
+    pub data: std::path::PathBuf,
+    pub config: std::path::PathBuf,
+    pub metadata: std::path::PathBuf,
+}
+
 impl SshRunner {
     pub fn new(worker: WorkerConfig) -> Self {
         Self { worker }
@@ -143,6 +151,89 @@ impl SshRunner {
             .context("remote boot file path was not reported")?;
 
         Ok(remote_path.to_string())
+    }
+
+    pub fn upload_artifact_tar(&self, app: &str, local_path: &Path) -> Result<String> {
+        validate_remote_name("app", app)?;
+        let mut local_file = File::open(local_path)
+            .context(format!("failed to open artifact {}", local_path.display()))?;
+        let mut child = self
+            .shell_command(&upload_artifact_tar_script(app))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("failed to run ssh artifact upload command")?;
+
+        {
+            let mut stdin = child.stdin.take().context("failed to open ssh stdin")?;
+            io::copy(&mut local_file, &mut stdin).context(format!(
+                "failed to stream artifact {}",
+                local_path.display()
+            ))?;
+        }
+
+        let output = child
+            .wait_with_output()
+            .context("failed to wait for ssh artifact upload command")?;
+        if !output.status.success() {
+            bail!(
+                "ssh artifact upload failed with status {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+
+        let stdout = String::from_utf8(output.stdout).context("ssh stdout is not utf-8")?;
+        let remote_path = stdout
+            .lines()
+            .next()
+            .context("remote artifact path was not reported")?;
+
+        Ok(remote_path.to_string())
+    }
+
+    pub fn materialize_rootfs_from_artifact(
+        &self,
+        app: &str,
+        artifact_path: &Path,
+        rootfs_size_mib: u64,
+        data_size_mib: u64,
+        port: u16,
+        init: &str,
+    ) -> Result<RemoteBuildArtifact> {
+        validate_remote_name("app", app)?;
+        validate_remote_path_value("init", init)?;
+        let artifact_path = path_to_remote_string(artifact_path)?;
+        let output = self
+            .run_shell(&materialize_rootfs_from_artifact_script(
+                app,
+                &artifact_path,
+                rootfs_size_mib,
+                data_size_mib,
+                port,
+                init,
+            ))
+            .context("failed to materialize rootfs on worker")?;
+        let stdout = String::from_utf8(output.stdout).context("ssh stdout is not utf-8")?;
+        let mut lines = stdout.lines();
+        let rootfs = lines
+            .next()
+            .context("remote rootfs path was not reported")?;
+        let data = lines.next().context("remote data path was not reported")?;
+        let config = lines
+            .next()
+            .context("remote app config path was not reported")?;
+        let metadata = lines
+            .next()
+            .context("remote metadata path was not reported")?;
+
+        Ok(RemoteBuildArtifact {
+            rootfs: rootfs.into(),
+            data: data.into(),
+            config: config.into(),
+            metadata: metadata.into(),
+        })
     }
 
     pub fn require_tap_interface(&self, tap: &str) -> Result<String> {
@@ -477,6 +568,34 @@ fn upload_boot_file_script(app: &str, kind: &str, filename: &str) -> String {
     )
 }
 
+fn upload_artifact_tar_script(app: &str) -> String {
+    render_ssh_script(
+        ssh_script!("upload_artifact_tar.sh"),
+        &[("app", shell_escape_for_double_quotes(app))],
+    )
+}
+
+fn materialize_rootfs_from_artifact_script(
+    app: &str,
+    artifact_path: &str,
+    rootfs_size_mib: u64,
+    data_size_mib: u64,
+    port: u16,
+    init: &str,
+) -> String {
+    render_ssh_script(
+        ssh_script!("materialize_rootfs_from_artifact.sh"),
+        &[
+            ("app", shell_escape_for_double_quotes(app)),
+            ("artifact_path", shell_quote(artifact_path)),
+            ("rootfs_size_mib", rootfs_size_mib.to_string()),
+            ("data_size_mib", data_size_mib.to_string()),
+            ("port", port.to_string()),
+            ("init", shell_quote(init)),
+        ],
+    )
+}
+
 fn require_tap_interface_script(tap: &str) -> String {
     render_ssh_script(
         ssh_script!("require_tap_interface.sh"),
@@ -560,6 +679,19 @@ fn path_to_remote_string(path: &Path) -> Result<String> {
     }
 
     Ok(value)
+}
+
+fn validate_remote_path_value(name: &str, value: &str) -> Result<()> {
+    if value.is_empty() {
+        bail!("{name} must not be empty");
+    }
+    if value.len() > 4096 {
+        bail!("{name} exceeds 4096 bytes");
+    }
+    if value.contains('\0') || value.contains('\n') || value.contains('\r') {
+        bail!("{name} must not contain control characters");
+    }
+    Ok(())
 }
 
 fn health_check_script(host: &str, port: u16) -> String {
@@ -706,6 +838,24 @@ mod tests {
     }
 
     #[test]
+    fn materialize_rootfs_script_keeps_stdout_for_paths_only() {
+        let script = materialize_rootfs_from_artifact_script(
+            "web",
+            "/tmp/artifact.tar",
+            1024,
+            256,
+            3000,
+            "/sbin/init",
+        );
+
+        assert!(script.contains("tar -C \"$work_dir\" -xf \"$artifact\" >&2"));
+        assert!(script.contains("\"$mkfs_bin\" -q -F -d \"$work_dir\" \"$rootfs\" >&2"));
+        assert!(script.contains("\"$mkfs_bin\" -q -F \"$data\" >&2"));
+        assert!(script.contains("printf '%s\\n' \"$rootfs\""));
+        assert!(script.contains("printf '%s\\n' \"$data\""));
+    }
+
+    #[test]
     fn builds_boot_file_upload_script() {
         let script = upload_boot_file_script("web", "rootfs", "rootfs.ext4");
 
@@ -732,7 +882,9 @@ mod tests {
 
         assert!(script.contains("ip link show dev \"$tap\""));
         assert!(script.contains("ip tuntap add dev \"$tap\" mode tap"));
+        assert!(script.contains("ip addr replace 10.0.0.1/30 dev \"$tap\""));
         assert!(script.contains("ip link set \"$tap\" up"));
+        assert!(script.contains("ip route replace 10.0.0.2/32 dev \"$tap\""));
         assert!(script.contains("printf '%s\\n' \"$tap\""));
     }
 

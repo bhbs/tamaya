@@ -93,6 +93,17 @@ impl Drive {
         Ok(drive)
     }
 
+    pub fn data(path_on_host: impl Into<PathBuf>) -> Result<Self> {
+        let drive = Self {
+            drive_id: "data".to_string(),
+            path_on_host: path_on_host.into(),
+            is_root_device: false,
+            is_read_only: false,
+        };
+        drive.validate()?;
+        Ok(drive)
+    }
+
     fn validate(&self) -> Result<()> {
         validate_bounded("drive_id", &self.drive_id, MAX_ID_BYTES)?;
         validate_path("path_on_host", &self.path_on_host)?;
@@ -163,6 +174,7 @@ pub struct BootPlan {
     pub machine_config: MachineConfig,
     pub boot_source: BootSource,
     pub rootfs: Drive,
+    pub data_drive: Option<Drive>,
     pub network_interface: NetworkInterface,
 }
 
@@ -222,6 +234,12 @@ impl FirecrackerClient {
             bail!("rootfs drive must be marked as the root device");
         }
 
+        self.put_drive(drive)
+    }
+
+    pub fn put_drive(&self, drive: &Drive) -> Result<UnixHttpRequest> {
+        drive.validate()?;
+
         UnixHttpRequest::new(
             "PUT",
             format!("/drives/{}", drive.drive_id),
@@ -239,12 +257,19 @@ impl FirecrackerClient {
     }
 
     pub fn build_boot_requests(&self, plan: &BootPlan) -> Result<Vec<UnixHttpRequest>> {
-        Ok(vec![
+        let mut requests = vec![
             self.put_machine_config(&plan.machine_config),
             self.put_boot_source(&plan.boot_source)?,
             self.put_rootfs_drive(&plan.rootfs)?,
-            self.put_network_interface(&plan.network_interface)?,
-        ])
+        ];
+        if let Some(data_drive) = &plan.data_drive {
+            if data_drive.is_root_device {
+                bail!("data drive must not be marked as the root device");
+            }
+            requests.push(self.put_drive(data_drive)?);
+        }
+        requests.push(self.put_network_interface(&plan.network_interface)?);
+        Ok(requests)
     }
 
     pub fn start_instance(&self) -> Result<UnixHttpRequest> {
@@ -315,6 +340,7 @@ mod tests {
             )
             .unwrap(),
             rootfs: Drive::rootfs("/var/lib/v/rootfs.ext4", false).unwrap(),
+            data_drive: None,
             network_interface: NetworkInterface::new(
                 "eth0",
                 "tap-v0",
@@ -365,6 +391,33 @@ mod tests {
         assert_eq!(request.method, "PUT");
         assert_eq!(request.path, "/actions");
         assert_eq!(request.body, r#"{"action_type":"InstanceStart"}"#);
+    }
+
+    #[test]
+    fn builds_data_drive_request_in_boot_plan() {
+        let client = FirecrackerClient::new("/tmp/firecracker.socket").unwrap();
+        let mut plan = plan();
+        plan.data_drive = Some(Drive::data("/var/lib/v/data.ext4").unwrap());
+        let requests = client.build_boot_requests(&plan).unwrap();
+        let paths: Vec<&str> = requests
+            .iter()
+            .map(|request| request.path.as_str())
+            .collect();
+
+        assert_eq!(
+            paths,
+            vec![
+                "/machine-config",
+                "/boot-source",
+                "/drives/rootfs",
+                "/drives/data",
+                "/network-interfaces/eth0"
+            ]
+        );
+        assert_eq!(
+            requests[3].body,
+            r#"{"drive_id":"data","path_on_host":"/var/lib/v/data.ext4","is_root_device":false,"is_read_only":false}"#
+        );
     }
 
     #[test]
@@ -438,6 +491,7 @@ mod tests {
             machine_config: MachineConfig::new(1, 256).unwrap(),
             boot_source: invalid_source,
             rootfs: Drive::rootfs("/rootfs.ext4", true).unwrap(),
+            data_drive: None,
             network_interface: NetworkInterface::new("eth0", "tap0", None).unwrap(),
         };
         assert!(client.build_boot_requests(&invalid_plan).is_err());
@@ -446,6 +500,7 @@ mod tests {
             machine_config: MachineConfig::new(1, 256).unwrap(),
             boot_source: BootSource::new("/kernel", "console=ttyS0").unwrap(),
             rootfs: invalid_drive,
+            data_drive: None,
             network_interface: NetworkInterface::new("eth0", "tap0", None).unwrap(),
         };
         assert!(client.build_boot_requests(&invalid_drive_plan).is_err());
@@ -454,6 +509,7 @@ mod tests {
             machine_config: MachineConfig::new(1, 256).unwrap(),
             boot_source: BootSource::new("/kernel", "console=ttyS0").unwrap(),
             rootfs: Drive::rootfs("/rootfs.ext4", true).unwrap(),
+            data_drive: None,
             network_interface: invalid_interface,
         };
         assert!(client.build_boot_requests(&invalid_interface_plan).is_err());

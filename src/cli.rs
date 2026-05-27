@@ -13,6 +13,18 @@ pub struct Cli {
 pub enum Command {
     /// Initialize local controller directories and config.
     Init,
+    /// Build an app artifact from a Dockerfile.
+    Build {
+        app: String,
+        #[arg(long, default_value = ".")]
+        context: PathBuf,
+        #[arg(long, default_value = "Dockerfile")]
+        dockerfile: PathBuf,
+        #[arg(long)]
+        artifact: Option<PathBuf>,
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Check Linux worker readiness and optionally validate remote files.
     Check {
         app: String,
@@ -42,13 +54,28 @@ pub enum Command {
         worker: Option<String>,
         #[arg(long)]
         kernel: PathBuf,
+        #[arg(
+            long,
+            conflicts_with = "artifact",
+            required_unless_present = "artifact"
+        )]
+        rootfs: Option<PathBuf>,
+        #[arg(long, conflicts_with = "rootfs", required_unless_present = "rootfs")]
+        artifact: Option<PathBuf>,
         #[arg(long)]
-        rootfs: PathBuf,
+        data: Option<PathBuf>,
+        #[arg(long, default_value_t = 1024)]
+        rootfs_size_mib: u64,
+        #[arg(long, default_value_t = 256)]
+        data_size_mib: u64,
         #[arg(long, default_value = "firecracker")]
         firecracker_bin: PathBuf,
         #[arg(long, default_value = "tap0")]
         tap: String,
-        #[arg(long, default_value = "console=ttyS0 reboot=k panic=1 pci=off")]
+        #[arg(
+            long,
+            default_value = "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/sbin/init"
+        )]
         boot_args: String,
         #[arg(long, default_value_t = 1)]
         vcpu: u8,
@@ -134,6 +161,8 @@ mod tests {
                 worker,
                 kernel,
                 rootfs,
+                artifact,
+                data,
                 tap,
                 vcpu,
                 memory_mib,
@@ -143,7 +172,9 @@ mod tests {
                 if app == "myapp"
                     && worker.as_deref() == Some("vps-prod")
                     && kernel == Path::new("/kernels/vmlinux")
-                    && rootfs == Path::new("/images/myapp-v2.ext4")
+                    && rootfs.as_deref() == Some(Path::new("/images/myapp-v2.ext4"))
+                    && artifact.is_none()
+                    && data.is_none()
                     && tap == "tap-web"
                     && vcpu == 2
                     && memory_mib == 512
@@ -166,6 +197,88 @@ mod tests {
 
         assert!(matches!(cli.command, Command::Deploy { app, dry_run, .. }
                 if app == "myapp" && dry_run));
+    }
+
+    #[test]
+    fn parses_deploy_with_artifact() {
+        let cli = Cli::try_parse_from([
+            "v",
+            "deploy",
+            "myapp",
+            "--kernel",
+            "/kernels/vmlinux",
+            "--artifact",
+            "/artifacts/myapp.tar",
+            "--rootfs-size-mib",
+            "2048",
+            "--data-size-mib",
+            "1024",
+            "--dry-run",
+        ])
+        .expect("parse deploy artifact command");
+
+        assert!(matches!(cli.command, Command::Deploy {
+                app,
+                rootfs,
+                artifact,
+                data,
+                rootfs_size_mib,
+                data_size_mib,
+                dry_run,
+                ..
+            }
+                if app == "myapp"
+                    && rootfs.is_none()
+                    && artifact.as_deref() == Some(Path::new("/artifacts/myapp.tar"))
+                    && data.is_none()
+                    && rootfs_size_mib == 2048
+                    && data_size_mib == 1024
+                    && dry_run));
+    }
+
+    #[test]
+    fn rejects_deploy_with_rootfs_and_artifact() {
+        let result = Cli::try_parse_from([
+            "v",
+            "deploy",
+            "myapp",
+            "--kernel",
+            "/kernels/vmlinux",
+            "--rootfs",
+            "/images/app.ext4",
+            "--artifact",
+            "/artifacts/app.tar",
+        ]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parses_build_with_context_dockerfile_and_dry_run() {
+        let cli = Cli::try_parse_from([
+            "v",
+            "build",
+            "myapp",
+            "--context",
+            "/workspace/myapp",
+            "--dockerfile",
+            "/workspace/myapp/Dockerfile",
+            "--dry-run",
+        ])
+        .expect("parse build dry-run command");
+
+        assert!(matches!(cli.command, Command::Build {
+                app,
+                context,
+                dockerfile,
+                artifact,
+                dry_run,
+            }
+                if app == "myapp"
+                    && context == Path::new("/workspace/myapp")
+                    && dockerfile == Path::new("/workspace/myapp/Dockerfile")
+                    && artifact.is_none()
+                    && dry_run));
     }
 
     #[test]
