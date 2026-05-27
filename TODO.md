@@ -50,8 +50,8 @@
 
 - [x] Boot a new VM from an immutable image.
 - [x] Run health checks (TCP + HTTP via SSH from worker).
-- [ ] Update reverse proxy routing (prints reload instructions; automatic config generation TBD).
-- [ ] Reload reverse proxy (prints reload instructions; automatic reload TBD).
+- [x] Update reverse proxy routing (Caddy config generation via `--domain` and `caddy_config_dir`).
+- [x] Reload reverse proxy (`sudo systemctl reload caddy` on worker).
 - [x] Drain the old VM (configurable `--drain-seconds`).
 - [x] Stop the old VM.
 - [x] Update app registry after a successful switch.

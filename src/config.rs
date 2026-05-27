@@ -31,6 +31,8 @@ pub struct WorkerConfig {
     #[serde(default)]
     pub identity_file: Option<PathBuf>,
     pub firecracker_bin: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caddy_config_dir: Option<PathBuf>,
 }
 
 impl Config {

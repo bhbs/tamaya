@@ -539,6 +539,256 @@ status = "starting"
 }
 
 #[test]
+fn deploy_dry_run_shows_proxy_update() {
+    let project = initialized_project("deploy-proxy-dry");
+    add_worker_config_with_caddy(&project);
+
+    let output = v_command(&project)
+        .args([
+            "deploy",
+            "web",
+            "--kernel",
+            "/kernels/vmlinux",
+            "--rootfs",
+            "/images/web-v2.ext4",
+            "--domain",
+            "web.example.com",
+            "--dry-run",
+        ])
+        .output()
+        .expect("run deploy");
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = stdout(&output);
+    assert!(stdout.contains("would update reverse proxy: web.example.com → 10.0.0.2:8080"));
+    assert!(stdout.contains("would reload Caddy"));
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
+#[test]
+fn deploy_dry_run_without_domain_shows_manual_proxy() {
+    let project = initialized_project("deploy-nodomain-dry");
+    add_worker_config_with_caddy(&project);
+
+    let output = v_command(&project)
+        .args([
+            "deploy",
+            "web",
+            "--kernel",
+            "/kernels/vmlinux",
+            "--rootfs",
+            "/images/web-v2.ext4",
+            "--dry-run",
+        ])
+        .output()
+        .expect("run deploy");
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = stdout(&output);
+    assert!(
+        stdout.contains("(no --domain set; proxy routing is manual)"),
+        "got: {stdout}"
+    );
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
+#[test]
+fn deploy_recovers_stale_deploying_registry_with_running_runtime() {
+    let project = initialized_project("deploy-stale-registry");
+    fs::write(
+        project.join(".local/state/v/registry.toml"),
+        r#"[apps.web]
+current_image = "/images/web-v1.ext4"
+volume_path = "/volumes/web"
+port = 8080
+status = "deploying"
+"#,
+    )
+    .expect("write registry");
+    fs::create_dir_all(project.join("runtime/v/web")).expect("create runtime");
+    fs::write(
+        project.join("runtime/v/web/state.toml"),
+        r#"app = "web"
+pid = 4242
+api_socket = "/run/user/0/v/web/firecracker.sock"
+worker = "fire"
+remote_runtime_dir = "/run/user/0/v/web"
+status = "running"
+"#,
+    )
+    .expect("write runtime state");
+
+    let output = v_command(&project)
+        .args([
+            "deploy",
+            "web",
+            "--kernel",
+            "/kernels/vmlinux",
+            "--rootfs",
+            "/images/web-v2.ext4",
+            "--dry-run",
+        ])
+        .output()
+        .expect("run deploy");
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = stdout(&output);
+    assert!(stdout.contains("previous deploy was interrupted; resetting status and retrying"));
+    assert!(stdout.contains("deploy: dry-run for web"));
+
+    let registry =
+        fs::read_to_string(project.join(".local/state/v/registry.toml")).expect("read registry");
+    assert!(registry.contains("status = \"running\""));
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
+#[test]
+fn deploy_blocks_when_deploy_runtime_state_exists() {
+    let project = initialized_project("deploy-active");
+    fs::write(
+        project.join(".local/state/v/registry.toml"),
+        r#"[apps.web]
+current_image = "/images/web-v1.ext4"
+volume_path = "/volumes/web"
+port = 8080
+status = "deploying"
+"#,
+    )
+    .expect("write registry");
+    fs::create_dir_all(project.join("runtime/v/web-deploy")).expect("create deploy runtime");
+    fs::write(
+        project.join("runtime/v/web-deploy/state.toml"),
+        r#"app = "web-deploy"
+api_socket = "/run/user/0/v/web-deploy/firecracker.sock"
+status = "starting"
+"#,
+    )
+    .expect("write deploy runtime state");
+
+    let output = v_command(&project)
+        .args([
+            "deploy",
+            "web",
+            "--kernel",
+            "/kernels/vmlinux",
+            "--rootfs",
+            "/images/web-v2.ext4",
+            "--dry-run",
+        ])
+        .output()
+        .expect("run deploy");
+
+    assert!(!output.status.success(), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).expect("stderr is utf-8");
+    assert!(stderr.contains("web: deploy is already in progress"));
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
+#[test]
+fn deploy_with_fake_ssh_updates_caddy_and_reloads() {
+    let project = initialized_project("deploy-caddy");
+    add_worker_config_with_caddy(&project);
+    let local_kernel = project.join("vmlinux");
+    let local_rootfs = project.join("rootfs.ext4");
+    fs::write(&local_kernel, "kernel").expect("write local kernel");
+    fs::write(&local_rootfs, "rootfs").expect("write local rootfs");
+    let fake_ssh = fake_ssh_bin(&project);
+    let fake_ssh_log = project.join("fake-ssh.log");
+
+    let output = v_command(&project)
+        .env("V_SSH_BIN", &fake_ssh)
+        .env("V_FAKE_SSH_LOG", &fake_ssh_log)
+        .env("V_FAKE_REMOTE_RUNTIME", "/tmp/v-fake-runtime/web-deploy")
+        .args(["deploy", "web", "--worker", "vps-prod", "--kernel"])
+        .arg(&local_kernel)
+        .args(["--rootfs"])
+        .arg(&local_rootfs)
+        .args(["--tap", "tap0"])
+        .args(["--domain", "web.example.com"])
+        .args(["--skip-health-check"])
+        .output()
+        .expect("run deploy");
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = stdout(&output);
+    assert!(stdout.contains("updating reverse proxy web.example.com → 10.0.0.2:8080"));
+    assert!(stdout.contains("Caddy reloaded"));
+
+    let ssh_log = fs::read_to_string(fake_ssh_log).expect("read fake ssh log");
+    assert!(ssh_log.contains("sudo mkdir -p \"$config_dir\""));
+    assert!(ssh_log.contains("sudo tee \"$config_file\""));
+    assert!(ssh_log.contains("web.example.com {"));
+    assert!(ssh_log.contains("reverse_proxy 10.0.0.2:8080"));
+    assert!(ssh_log.contains("sudo systemctl reload caddy"));
+
+    let state =
+        fs::read_to_string(project.join("runtime/v/web/state.toml")).expect("read runtime state");
+    assert!(state.contains("app = \"web\""));
+    assert!(state.contains("api_socket = \"/tmp/v-fake-runtime/web/firecracker.sock\""));
+    assert!(state.contains("remote_runtime_dir = \"/tmp/v-fake-runtime/web\""));
+    assert!(!project.join("runtime/v/web-deploy").exists());
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
+#[test]
+fn setup_installs_caddy_on_worker() {
+    let project = initialized_project("setup-caddy");
+    add_worker_config_with_caddy(&project);
+    let fake_ssh = fake_ssh_bin(&project);
+    let fake_ssh_log = project.join("fake-ssh.log");
+
+    let output = v_command(&project)
+        .env("V_SSH_BIN", &fake_ssh)
+        .env("V_FAKE_SSH_LOG", &fake_ssh_log)
+        .args(["setup", "--worker", "vps-prod", "--caddy"])
+        .output()
+        .expect("run setup");
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = stdout(&output);
+    assert!(stdout.contains("kvm/firecracker: ok"));
+    assert!(stdout.contains("caddy:"));
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
+#[test]
+fn check_with_caddy_config_detects_caddy() {
+    let project = initialized_project("check-caddy");
+    add_worker_config_with_caddy(&project);
+    let fake_ssh = fake_ssh_bin(&project);
+    let fake_ssh_log = project.join("fake-ssh.log");
+
+    let output = v_command(&project)
+        .env("V_SSH_BIN", &fake_ssh)
+        .env("V_FAKE_SSH_LOG", &fake_ssh_log)
+        .args([
+            "check",
+            "web",
+            "--worker",
+            "vps-prod",
+            "--skip-kernel",
+            "--skip-rootfs",
+        ])
+        .output()
+        .expect("run check");
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = stdout(&output);
+    assert!(stdout.contains("caddy: installed and running"));
+
+    let ssh_log = fs::read_to_string(fake_ssh_log).expect("read fake ssh log");
+    assert!(ssh_log.contains("command -v caddy"));
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
+#[test]
 fn missing_config_fails() {
     let project = temp_project_dir("missing-config");
 
@@ -573,6 +823,23 @@ default_worker = "vps-prod"
 host = "203.0.113.10"
 user = "deploy"
 firecracker_bin = "/usr/local/bin/firecracker"
+"#,
+    );
+    fs::write(config_path, config).expect("write worker config");
+}
+
+fn add_worker_config_with_caddy(project: &Path) {
+    let config_path = project.join(".config/v/config.toml");
+    let mut config = fs::read_to_string(&config_path).expect("read config");
+    config.push_str(
+        r#"
+default_worker = "vps-prod"
+
+[workers.vps-prod]
+host = "203.0.113.10"
+user = "deploy"
+firecracker_bin = "/usr/local/bin/firecracker"
+caddy_config_dir = "/etc/caddy/conf.d"
 "#,
     );
     fs::write(config_path, config).expect("write worker config");
@@ -622,11 +889,11 @@ pid="${V_FAKE_FIRECRACKER_PID:-4242}"
 printf '%s\n' "$*" >> "$log"
 
 case "$*" in
-  *"destination="*"web-kernel-vmlinux"*)
+  *"destination="*"-kernel-vmlinux"*)
     cat >/dev/null
     printf '%s\n' "/tmp/v-fake-images/web-kernel-vmlinux"
     ;;
-  *"destination="*"web-rootfs-rootfs.ext4"*)
+  *"destination="*"-rootfs-rootfs.ext4"*)
     cat >/dev/null
     printf '%s\n' "/tmp/v-fake-images/web-rootfs-rootfs.ext4"
     ;;
@@ -647,6 +914,9 @@ case "$*" in
     ;;
   *"tap='\"'\"'tap-web'\"'\"'"*)
     printf '%s\n' "tap-web"
+    ;;
+  *"tap='"*)
+    printf '%s\n' "tap-fake"
     ;;
   *)
     :

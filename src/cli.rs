@@ -56,6 +56,8 @@ pub enum Command {
         skip_rootfs: bool,
         #[arg(long)]
         skip_tap: bool,
+        #[arg(long)]
+        skip_caddy: bool,
     },
     /// Deploy an immutable app image.
     Deploy {
@@ -90,6 +92,8 @@ pub enum Command {
         skip_health_check: bool,
         #[arg(long)]
         dry_run: bool,
+        #[arg(long)]
+        domain: Option<String>,
     },
     /// Roll back an app to the previous image.
     Rollback { app: String },
@@ -99,6 +103,15 @@ pub enum Command {
     Stop { app: String },
     /// Show app logs.
     Logs { app: String },
+    /// Install and configure worker prerequisites (Firecracker, Caddy, etc).
+    Setup {
+        #[arg(long)]
+        worker: Option<String>,
+        #[arg(long)]
+        caddy: bool,
+    },
+    /// Force-clean up stale lock files for an app.
+    Unlock { app: String },
 }
 
 #[cfg(test)]
@@ -224,6 +237,7 @@ mod tests {
                 skip_kernel,
                 skip_rootfs,
                 skip_tap,
+                ..
             }
                 if app == "web"
                     && worker.as_deref() == Some("vps-prod")
@@ -270,6 +284,7 @@ mod tests {
                 skip_kernel,
                 skip_rootfs,
                 skip_tap,
+                ..
             }
                 if app == "web"
                     && worker.as_deref() == Some("vps-prod")
@@ -288,5 +303,25 @@ mod tests {
         let result = Cli::try_parse_from(["v"]);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parses_setup_command() {
+        let cli = Cli::try_parse_from(["v", "setup", "--worker", "vps-prod"])
+            .expect("parse setup command");
+
+        assert!(matches!(cli.command, Command::Setup {
+                worker, caddy,
+            }
+                if worker.as_deref() == Some("vps-prod")
+                    && !caddy));
+    }
+
+    #[test]
+    fn parses_setup_with_caddy() {
+        let cli = Cli::try_parse_from(["v", "setup", "--caddy"]).expect("parse setup with caddy");
+
+        assert!(matches!(cli.command, Command::Setup { caddy, .. }
+                if caddy));
     }
 }

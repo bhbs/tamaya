@@ -51,6 +51,7 @@ fn main() -> Result<()> {
             skip_kernel,
             skip_rootfs,
             skip_tap,
+            skip_caddy,
         } => app::check(app::CheckOptions {
             app,
             worker,
@@ -62,6 +63,7 @@ fn main() -> Result<()> {
             skip_kernel,
             skip_rootfs,
             skip_tap,
+            skip_caddy,
         }),
         Command::Ps => app::ps(),
         Command::Deploy {
@@ -81,6 +83,7 @@ fn main() -> Result<()> {
             drain_seconds,
             skip_health_check,
             dry_run,
+            domain,
         } => app::deploy(app::DeployOptions {
             app,
             worker,
@@ -98,9 +101,12 @@ fn main() -> Result<()> {
             drain_seconds,
             skip_health_check,
             dry_run,
+            domain,
         }),
         Command::Rollback { app } => app::rollback(&app),
         Command::Stop { app } => app::stop(&app),
         Command::Logs { app } => app::logs(&app),
+        Command::Setup { worker, caddy } => app::setup(app::SetupOptions { worker, caddy }),
+        Command::Unlock { app } => app::unlock(&app),
     }
 }

@@ -237,10 +237,16 @@ impl SshRunner {
     pub fn rename_runtime_dir(&self, old_path: &Path, new_path: &Path) -> Result<()> {
         let old_path = path_to_remote_string(old_path)?;
         let new_path = path_to_remote_string(new_path)?;
-        self.run_shell(&rename_runtime_dir_script(&old_path, &new_path))
-            .context(format!(
-                "failed to rename remote runtime dir {old_path} → {new_path}"
-            ))?;
+        if let Err(error) = self.run_shell(&rename_runtime_dir_script(&old_path, &new_path)) {
+            if self
+                .run_shell(&runtime_dir_renamed_script(&old_path, &new_path))
+                .is_err()
+            {
+                return Err(error).context(format!(
+                    "failed to rename remote runtime dir {old_path} → {new_path}"
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -276,6 +282,62 @@ impl SshRunner {
         if !status.success() {
             bail!("ssh stream command failed with status {}", status);
         }
+        Ok(())
+    }
+
+    pub fn update_caddy_config(
+        &self,
+        app: &str,
+        domain: &str,
+        vm_host: &str,
+        vm_port: u16,
+    ) -> Result<()> {
+        validate_remote_name("app", app)?;
+        let config_dir = self
+            .worker
+            .caddy_config_dir
+            .as_ref()
+            .context("worker does not have caddy_config_dir configured")?;
+        let config_dir = path_to_remote_string(config_dir)?;
+        self.run_shell(&update_caddy_config_script(
+            app,
+            domain,
+            vm_host,
+            vm_port,
+            &config_dir,
+        ))
+        .context("failed to update Caddy config")?;
+        Ok(())
+    }
+
+    pub fn remove_caddy_config(&self, app: &str) -> Result<()> {
+        validate_remote_name("app", app)?;
+        let config_dir = self
+            .worker
+            .caddy_config_dir
+            .as_ref()
+            .context("worker does not have caddy_config_dir configured")?;
+        let config_dir = path_to_remote_string(config_dir)?;
+        self.run_shell(&remove_caddy_config_script(app, &config_dir))
+            .context("failed to remove Caddy config")?;
+        Ok(())
+    }
+
+    pub fn reload_caddy(&self) -> Result<()> {
+        self.run_shell(&reload_caddy_script())
+            .context("failed to reload Caddy")?;
+        Ok(())
+    }
+
+    pub fn check_caddy(&self) -> Result<()> {
+        self.run_shell(&check_caddy_script())
+            .context("Caddy is not installed or running on worker")?;
+        Ok(())
+    }
+
+    pub fn install_caddy(&self) -> Result<()> {
+        self.run_shell(&install_caddy_script())
+            .context("failed to install Caddy on worker")?;
         Ok(())
     }
 }
@@ -430,12 +492,28 @@ if [ ! -d "$old" ]; then
   exit 1
 fi
 if [ -d "$new" ]; then
-  echo "destination already exists: $new" >&2
-  exit 1
+  rm -rf "$new"
 fi
 mkdir -p "$(dirname "$new")"
 mv "$old" "$new"
 printf '%s\n' "$new"
+"#,
+        old_path = shell_quote(old_path),
+        new_path = shell_quote(new_path),
+    )
+}
+
+fn runtime_dir_renamed_script(old_path: &str, new_path: &str) -> String {
+    format!(
+        r#"set -eu
+old={old_path}
+new={new_path}
+if [ -d "$new" ] && [ ! -e "$old" ]; then
+  printf '%s\n' "$new"
+else
+  echo "runtime rename did not complete: $old -> $new" >&2
+  exit 1
+fi
 "#,
         old_path = shell_quote(old_path),
         new_path = shell_quote(new_path),
@@ -648,6 +726,99 @@ fi
     )
 }
 
+fn update_caddy_config_script(
+    app: &str,
+    domain: &str,
+    vm_host: &str,
+    vm_port: u16,
+    config_dir: &str,
+) -> String {
+    format!(
+        r#"set -eu
+app={app}
+domain={domain}
+target={target}
+config_dir={config_dir}
+config_file="$config_dir/$app.caddy"
+sudo mkdir -p "$config_dir"
+sudo tee "$config_file" >/dev/null <<'EOF'
+{domain} {{
+    reverse_proxy {vm_host}:{vm_port}
+}}
+EOF
+printf '%s\n' "$config_file"
+"#,
+        app = shell_escape_for_double_quotes(app),
+        domain = shell_escape_for_double_quotes(domain),
+        target = shell_escape_for_double_quotes(&format!("{vm_host}:{vm_port}")),
+        config_dir = shell_escape_for_double_quotes(config_dir),
+        vm_host = shell_escape_for_double_quotes(vm_host),
+        vm_port = vm_port,
+    )
+}
+
+fn remove_caddy_config_script(app: &str, config_dir: &str) -> String {
+    format!(
+        r#"set -eu
+app={app}
+config_dir={config_dir}
+config_file="$config_dir/$app.caddy"
+if [ -f "$config_file" ]; then
+  sudo rm -f "$config_file"
+  printf '%s\n' "$config_file"
+else
+  printf '%s\n' "no config to remove for $app"
+fi
+"#,
+        app = shell_escape_for_double_quotes(app),
+        config_dir = shell_escape_for_double_quotes(config_dir),
+    )
+}
+
+fn reload_caddy_script() -> String {
+    r#"set -eu
+sudo systemctl reload caddy
+"#
+    .to_string()
+}
+
+fn check_caddy_script() -> String {
+    r#"set -eu
+if command -v caddy >/dev/null 2>&1; then
+  if systemctl is-active --quiet caddy 2>/dev/null; then
+    printf '%s\n' "caddy: installed and running"
+    exit 0
+  fi
+  caddy version >/dev/null 2>&1 && exit 0
+fi
+echo "caddy: not found or not running" >&2
+exit 1
+"#
+    .to_string()
+}
+
+fn install_caddy_script() -> String {
+    r#"set -eu
+if command -v caddy >/dev/null 2>&1; then
+  printf '%s\n' "caddy already installed"
+  exit 0
+fi
+echo "installing Caddy via apt..."
+sudo apt update -qq
+sudo apt install -y -qq debian-keyring debian-archive-keyring apt-transport-https curl
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+  | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+  | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+sudo apt update -qq
+sudo apt install -y -qq caddy
+sudo systemctl enable caddy
+sudo systemctl start caddy
+printf '%s\n' "caddy installed and started"
+"#
+    .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -660,6 +831,7 @@ mod tests {
             port: Some(2222),
             identity_file: Some(PathBuf::from("/keys/prod")),
             firecracker_bin: "/usr/local/bin/firecracker".to_string(),
+            caddy_config_dir: Some(PathBuf::from("/etc/caddy/conf.d")),
         }
     }
 
@@ -808,6 +980,14 @@ mod tests {
     }
 
     #[test]
+    fn builds_remote_runtime_rename_verification_script() {
+        let script = runtime_dir_renamed_script("/run/v/web-deploy", "/run/v/web");
+
+        assert!(script.contains("[ -d \"$new\" ] && [ ! -e \"$old\" ]"));
+        assert!(script.contains("runtime rename did not complete"));
+    }
+
+    #[test]
     fn builds_health_check_script() {
         let script = health_check_script("10.0.0.2", 8080);
 
@@ -831,5 +1011,55 @@ mod tests {
         let script = http_health_check_script("10.0.0.2", 3000, "/health");
 
         assert!(script.contains("path=/health"));
+    }
+
+    #[test]
+    fn builds_caddy_config_update_script() {
+        let script = update_caddy_config_script(
+            "myapp",
+            "myapp.example.com",
+            "10.0.0.2",
+            8080,
+            "/etc/caddy/conf.d",
+        );
+
+        assert!(script.contains("config_file=\"$config_dir/$app.caddy\""));
+        assert!(script.contains("sudo mkdir -p \"$config_dir\""));
+        assert!(script.contains("sudo tee \"$config_file\""));
+        assert!(script.contains("myapp.example.com {"));
+        assert!(script.contains("reverse_proxy 10.0.0.2:8080"));
+    }
+
+    #[test]
+    fn builds_caddy_config_remove_script() {
+        let script = remove_caddy_config_script("myapp", "/etc/caddy/conf.d");
+
+        assert!(script.contains("config_file=\"$config_dir/$app.caddy\""));
+        assert!(script.contains("sudo rm -f \"$config_file\""));
+        assert!(script.contains("no config to remove"));
+    }
+
+    #[test]
+    fn builds_caddy_reload_script() {
+        let script = reload_caddy_script();
+
+        assert!(script.contains("sudo systemctl reload caddy"));
+    }
+
+    #[test]
+    fn builds_check_caddy_script() {
+        let script = check_caddy_script();
+
+        assert!(script.contains("command -v caddy"));
+        assert!(script.contains("systemctl is-active --quiet caddy"));
+    }
+
+    #[test]
+    fn builds_install_caddy_script() {
+        let script = install_caddy_script();
+
+        assert!(script.contains("sudo apt install -y -qq caddy"));
+        assert!(script.contains("sudo systemctl enable caddy"));
+        assert!(script.contains("caddy-stable"));
     }
 }

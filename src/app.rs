@@ -40,6 +40,13 @@ pub struct CheckOptions {
     pub skip_kernel: bool,
     pub skip_rootfs: bool,
     pub skip_tap: bool,
+    pub skip_caddy: bool,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct SetupOptions {
+    pub worker: Option<String>,
+    pub caddy: bool,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -60,6 +67,7 @@ pub struct DeployOptions {
     pub drain_seconds: u32,
     pub skip_health_check: bool,
     pub dry_run: bool,
+    pub domain: Option<String>,
 }
 
 #[derive(Clone)]
@@ -246,6 +254,38 @@ pub fn init() -> Result<()> {
     Ok(())
 }
 
+pub fn setup(options: SetupOptions) -> Result<()> {
+    let config = load_config()?;
+    let (worker_name, worker) = config.worker(options.worker.as_deref())?;
+    let runner = SshRunner::new(worker.clone());
+
+    println!("v setup: worker {worker_name} ({})", worker.ssh_target());
+    println!();
+
+    runner.check_capabilities()?;
+    println!("  kvm/firecracker: ok");
+
+    if options.caddy {
+        if worker.caddy_config_dir.is_none() {
+            println!("  caddy: caddy_config_dir is not set in worker config; add it first");
+        } else {
+            match runner.check_caddy() {
+                Ok(_) => println!("  caddy: already installed"),
+                Err(_) => {
+                    println!("  caddy: installing...");
+                    runner.install_caddy()?;
+                    println!("  caddy: installed");
+                }
+            }
+        }
+    }
+
+    println!();
+    println!("ok");
+
+    Ok(())
+}
+
 pub fn ps() -> Result<()> {
     let config = load_config()?;
     let registry = Registry::load(&config.registry_file)?;
@@ -407,6 +447,35 @@ pub fn check(options: CheckOptions) -> Result<()> {
         Some(runner.require_tap_interface(&options.tap)?)
     };
 
+    if options.skip_caddy {
+        println!("caddy: skipped");
+    } else if worker.caddy_config_dir.is_some() {
+        match runner.check_caddy() {
+            Ok(_) => println!("caddy: installed and running"),
+            Err(_) => {
+                println!("caddy: not found or not running on worker");
+                println!();
+                println!("  To install Caddy:");
+                println!(
+                    "    sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https"
+                );
+                println!(
+                    "    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \\"
+                );
+                println!(
+                    "      | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg"
+                );
+                println!(
+                    "    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \\"
+                );
+                println!("      | sudo tee /etc/apt/sources.list.d/caddy-stable.list");
+                println!("    sudo apt update && sudo apt install caddy");
+                println!();
+                println!("  See https://caddyserver.com/docs/install for other distributions.");
+            }
+        }
+    }
+
     println!("worker: {worker_name} ({})", worker.ssh_target());
     if let Some(remote_runtime) = &remote_runtime {
         println!("remote runtime: {remote_runtime}");
@@ -478,8 +547,30 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
     let config = load_config()?;
     let app = options.app.as_str();
     validate_remote_name("app", app)?;
-    let _app_lock = LockFile::acquire(&config.locks_dir, &app_lock_name(app))?;
-    let _volume_lock = LockFile::acquire(&config.locks_dir, &volume_lock_name(app))?;
+
+    let app_lock =
+        LockFile::acquire(&config.locks_dir, &app_lock_name(app)).with_context(|| {
+            format!(
+                "stale lock? try: rm {}/{}.lock",
+                config.locks_dir.display(),
+                app_lock_name(app)
+            )
+        })?;
+    let volume_lock = match LockFile::acquire(&config.locks_dir, &volume_lock_name(app)) {
+        Ok(lock) => lock,
+        Err(e) => {
+            drop(app_lock);
+            return Err(e).with_context(|| {
+                format!(
+                    "stale lock? try: rm {}/{}.lock",
+                    config.locks_dir.display(),
+                    volume_lock_name(app)
+                )
+            });
+        }
+    };
+    let _app_lock = app_lock;
+    let _volume_lock = volume_lock;
 
     let mut registry = Registry::load(&config.registry_file)?;
     let old_port = registry
@@ -488,10 +579,30 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
         .map(|entry| entry.port)
         .unwrap_or(8080u16);
 
-    if let Some(entry) = registry.apps.get(app)
-        && entry.status == AppStatus::Deploying
-    {
-        bail!("{app}: deploy is already in progress");
+    let is_deploying = registry
+        .apps
+        .get(app)
+        .is_some_and(|e| e.status == AppStatus::Deploying);
+    if is_deploying {
+        let old_layout = RuntimeLayout::from_runtime_dir(&config.runtime_dir, app);
+        let deploy_layout =
+            RuntimeLayout::from_runtime_dir(&config.runtime_dir, format!("{app}-deploy"));
+        if deploy_layout.state_file_path().exists() {
+            bail!("{app}: deploy is already in progress");
+        }
+        println!("deploy: previous deploy was interrupted; resetting status and retrying");
+        let recovered_status = RuntimeState::load(&old_layout.state_file_path())
+            .ok()
+            .and_then(|state| match state.status {
+                RuntimeStatus::Running => Some(AppStatus::Running),
+                RuntimeStatus::Stopped => Some(AppStatus::Stopped),
+                _ => None,
+            })
+            .unwrap_or(AppStatus::Stopped);
+        registry.apps.entry(app.to_string()).and_modify(|e| {
+            e.status = recovered_status;
+        });
+        registry.save(&config.registry_file)?;
     }
 
     let old_status = registry
@@ -517,6 +628,13 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
         println!("  vcpu: {}", options.vcpu);
         println!("  memory_mib: {}", options.memory_mib);
         println!("  health check host: {}", options.health_check_host);
+        if let Some(ref domain) = options.domain {
+            let proxy_target = format!("{}:{}", options.health_check_host, old_port);
+            println!("  would update reverse proxy: {domain} → {proxy_target}");
+            println!("  would reload Caddy");
+        } else {
+            println!("  (no --domain set; proxy routing is manual)");
+        }
         return Ok(());
     }
 
@@ -630,38 +748,26 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
     // New VM confirmed healthy — keep it even if later steps fail
     cleanup.disarm();
 
-    // Rename remote runtime: {app}-deploy → {app}
-    let deploy_remote_dir = ctx.remote_runtime_dir.clone();
-    let remote_name_pattern = format!("/{deploy_app}");
-    let primary_remote_dir = deploy_remote_dir
-        .to_str()
-        .map(|s| PathBuf::from(s.replace(&remote_name_pattern, &format!("/{app}"))))
-        .and_then(|new_dir| {
-            let runner = SshRunner::new(worker.clone());
-            match runner.rename_runtime_dir(&deploy_remote_dir, &new_dir) {
-                Ok(_) => {
-                    println!(
-                        "deploy: renamed remote runtime {} → {}",
-                        deploy_remote_dir.display(),
-                        new_dir.display()
-                    );
-                    Some(new_dir)
-                }
-                Err(e) => {
-                    println!(
-                        "deploy: could not rename remote runtime (keeping {}): {e}",
-                        deploy_remote_dir.display()
-                    );
-                    None
-                }
-            }
-        })
-        .unwrap_or_else(|| deploy_remote_dir.clone());
-
     // Switch traffic
     println!("deploy: switching traffic for {app}");
-    println!("deploy: update your reverse proxy to route traffic for {app} to the new VM");
-    println!("deploy: reload your proxy (e.g. `systemctl reload caddy`)");
+
+    let runner = SshRunner::new(worker.clone());
+    if let (Some(domain), Some(_)) = (options.domain.as_ref(), worker.caddy_config_dir.as_ref()) {
+        let proxy_target = format!("{}:{}", options.health_check_host, old_port);
+        println!("deploy: updating reverse proxy {domain} → {proxy_target}");
+        if let Err(e) =
+            runner.update_caddy_config(app, domain, &options.health_check_host, old_port)
+        {
+            println!("deploy: failed to update Caddy config: {e:#}");
+        } else if let Err(e) = runner.reload_caddy() {
+            println!("deploy: failed to reload Caddy: {e:#}");
+        } else {
+            println!("deploy: Caddy reloaded");
+        }
+    } else {
+        println!("deploy: update your reverse proxy to route traffic for {app} to the new VM");
+        println!("deploy: reload your proxy (e.g. `systemctl reload caddy`)");
+    }
 
     // Drain old VM
     if has_old_vm {
@@ -690,12 +796,42 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
         let _ = old_runner.delete_tap_interface(&options.tap);
     }
 
+    // Rename remote runtime: {app}-deploy → {app}
+    // Must happen AFTER old VM is stopped so the destination directory is free.
+    let deploy_remote_dir = ctx.remote_runtime_dir.clone();
+    let remote_name_pattern = format!("/{deploy_app}");
+    let primary_remote_dir = deploy_remote_dir
+        .to_str()
+        .map(|s| PathBuf::from(s.replace(&remote_name_pattern, &format!("/{app}"))))
+        .and_then(|new_dir| {
+            let runner = SshRunner::new(worker.clone());
+            match runner.rename_runtime_dir(&deploy_remote_dir, &new_dir) {
+                Ok(_) => {
+                    println!(
+                        "deploy: renamed remote runtime {} → {}",
+                        deploy_remote_dir.display(),
+                        new_dir.display()
+                    );
+                    Some(new_dir)
+                }
+                Err(e) => {
+                    println!(
+                        "deploy: could not rename remote runtime (keeping {}): {e:#}",
+                        deploy_remote_dir.display()
+                    );
+                    None
+                }
+            }
+        })
+        .unwrap_or_else(|| deploy_remote_dir.clone());
+
     // Swap runtime state: {app}-deploy → {app}
     let deploy_state = RuntimeState::load(&deploy_layout.state_file_path())?;
     let new_layout = RuntimeLayout::from_runtime_dir(&config.runtime_dir, app);
     old_layout.remove()?;
     new_layout.create_dirs()?;
-    RuntimeState::new(app.to_string(), new_layout.api_socket_path())
+    let primary_api_socket = primary_remote_dir.join("firecracker.sock");
+    RuntimeState::new(app.to_string(), primary_api_socket)
         .with_pid(deploy_state.pid.unwrap_or(ctx.pid))
         .with_worker(
             deploy_state
@@ -703,12 +839,7 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
                 .clone()
                 .unwrap_or_else(|| worker_name.clone()),
         )
-        .with_remote_runtime_dir(
-            deploy_state
-                .remote_runtime_dir
-                .clone()
-                .unwrap_or_else(|| primary_remote_dir.clone()),
-        )
+        .with_remote_runtime_dir(primary_remote_dir)
         .with_status(RuntimeStatus::Running)
         .with_status_message("deployed")
         .save(&new_layout.state_file_path())?;
@@ -727,6 +858,36 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
     registry.save(&config.registry_file)?;
 
     println!("deploy: {app} deployed successfully");
+
+    Ok(())
+}
+
+pub fn unlock(app: &str) -> Result<()> {
+    let config = load_config()?;
+    let app_lock_path = config
+        .locks_dir
+        .join(format!("{}.lock", app_lock_name(app)));
+    let volume_lock_path = config
+        .locks_dir
+        .join(format!("{}.lock", volume_lock_name(app)));
+
+    let mut removed = false;
+    for path in [&app_lock_path, &volume_lock_path] {
+        match fs::remove_file(path) {
+            Ok(()) => {
+                println!("unlock: removed {}", path.display());
+                removed = true;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                println!("unlock: failed to remove {}: {e}", path.display());
+            }
+        }
+    }
+
+    if !removed {
+        println!("unlock: no lock files found for {app}");
+    }
 
     Ok(())
 }
@@ -754,12 +915,15 @@ pub fn stop(app: &str) -> Result<()> {
         Err(error) => return Err(error),
     };
 
+    let mut worker_for_proxy: Option<WorkerConfig> = None;
+
     let stopped_pid = state.pid;
     if let Some(worker_name) = &state.worker {
         if let (Some(pid), Some(remote_runtime_dir)) =
             (state.pid, state.remote_runtime_dir.as_ref())
         {
             let (_, worker) = config.worker(Some(worker_name))?;
+            worker_for_proxy = Some(worker.clone());
             let runner = SshRunner::new(worker.clone());
             runner.stop_firecracker(pid, remote_runtime_dir)?;
         }
@@ -772,6 +936,14 @@ pub fn stop(app: &str) -> Result<()> {
     match stopped_pid {
         Some(pid) => println!("stop: stopped {app} pid {pid}"),
         None => println!("stop: stopped {app}"),
+    }
+
+    if let Some(ref worker) = worker_for_proxy
+        && worker.caddy_config_dir.is_some()
+    {
+        let runner = SshRunner::new(worker.clone());
+        let _ = runner.remove_caddy_config(app);
+        let _ = runner.reload_caddy();
     }
 
     Ok(())
