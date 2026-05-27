@@ -46,15 +46,7 @@
 - [x] Clean up stale runtime state.
 - [x] Implement `v logs <app>`.
 
-## Phase 4: Volumes
-
-- Implement `v volume create <app>`.
-- Manage ext4 data volume files or block devices on the worker.
-- Enforce attach policy.
-- Enforce single-writer volume locks.
-- Attach persistent data volume to the guest.
-
-## Phase 5: Deploy
+## Phase 4: Deploy
 
 - Boot a new VM from an immutable image.
 - Run health checks.
@@ -64,7 +56,7 @@
 - Stop the old VM.
 - Update app registry after a successful switch.
 
-## Phase 6: Rollback
+## Phase 5: Rollback
 
 - Store previous image metadata.
 - Boot rollback VM.
@@ -73,12 +65,20 @@
 - Stop failed or replaced VM.
 - Keep DB schema rollback out of scope for the first implementation.
 
-## Phase 7: Image Build
+## Phase 6: Image Build
 
 - Accept existing ext4 rootfs images first.
 - Add Docker export based image creation on Mac or dedicated builder.
 - Upload or sync built images to the worker.
 - Add dedicated image builder later.
+
+## Phase 7: Volumes
+
+- Implement `v volume create <app>`.
+- Manage ext4 data volume files or block devices on the worker.
+- Enforce attach policy.
+- Enforce single-writer volume locks.
+- Attach persistent data volume to the guest.
 
 ## Future Work
 
