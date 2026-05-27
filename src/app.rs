@@ -383,22 +383,24 @@ pub fn check_runtime_alignment(
 ) -> Vec<String> {
     let mut misaligned = Vec::new();
     for (name, state) in runtime_entries {
-        if let (Some(worker_name), Some(remote_dir)) = (&state.worker, &state.remote_runtime_dir) {
-            if let Ok((_, worker)) = config.worker(Some(worker_name)) {
-                let runner = SshRunner::new(worker.clone());
-                match runner.remote_dir_exists(remote_dir) {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        log::warn!(
-                            "{}: remote runtime dir {} does not exist on worker {worker_name}",
-                            name,
-                            remote_dir.display()
-                        );
-                        misaligned.push(name.clone());
-                    }
-                    Err(e) => {
-                        log::warn!("{name}: could not verify remote runtime dir on worker {worker_name}: {e:#}");
-                    }
+        if let (Some(worker_name), Some(remote_dir)) = (&state.worker, &state.remote_runtime_dir)
+            && let Ok((_, worker)) = config.worker(Some(worker_name))
+        {
+            let runner = SshRunner::new(worker.clone());
+            match runner.remote_dir_exists(remote_dir) {
+                Ok(true) => {}
+                Ok(false) => {
+                    log::warn!(
+                        "{}: remote runtime dir {} does not exist on worker {worker_name}",
+                        name,
+                        remote_dir.display()
+                    );
+                    misaligned.push(name.clone());
+                }
+                Err(e) => {
+                    log::warn!(
+                        "{name}: could not verify remote runtime dir on worker {worker_name}: {e:#}"
+                    );
                 }
             }
         }
@@ -879,27 +881,24 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
             .to_string_lossy()
             .replace(&remote_name_pattern, &format!("/{app}")),
     );
-    let (primary_remote_dir, rename_failed) = match rename_runtime_dir_with_retries(
-        worker,
-        &deploy_remote_dir,
-        &new_dir,
-    ) {
-        Ok(()) => {
-            log::info!(
-                "deploy: renamed remote runtime {} → {}",
-                deploy_remote_dir.display(),
-                new_dir.display()
-            );
-            (new_dir, false)
-        }
-        Err(e) => {
-            log::error!(
-                "deploy: could not rename remote runtime (keeping {}): {e:#}",
-                deploy_remote_dir.display()
-            );
-            (deploy_remote_dir.clone(), true)
-        }
-    };
+    let (primary_remote_dir, rename_failed) =
+        match rename_runtime_dir_with_retries(worker, &deploy_remote_dir, &new_dir) {
+            Ok(()) => {
+                log::info!(
+                    "deploy: renamed remote runtime {} → {}",
+                    deploy_remote_dir.display(),
+                    new_dir.display()
+                );
+                (new_dir, false)
+            }
+            Err(e) => {
+                log::error!(
+                    "deploy: could not rename remote runtime (keeping {}): {e:#}",
+                    deploy_remote_dir.display()
+                );
+                (deploy_remote_dir.clone(), true)
+            }
+        };
 
     // Swap runtime state: {app}-deploy → {app}
     log::info!("deploy: swapping runtime state {deploy_app} → {app}");
