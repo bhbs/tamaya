@@ -65,22 +65,15 @@ pub fn build(options: BuildOptions) -> Result<()> {
     }
 
     let app_lock = LockFile::acquire(&config.locks_dir, &app_lock_name(&options.app))
-        .with_context(|| {
-            format!(
-                "stale lock? try: rm {}/{}.lock",
-                config.locks_dir.display(),
-                app_lock_name(&options.app)
-            )
-        })?;
+        .with_context(|| format!("lock acquisition failed; try: v unlock {}", options.app))?;
     let volume_lock = match LockFile::acquire(&config.locks_dir, &volume_lock_name(&options.app)) {
         Ok(lock) => lock,
         Err(e) => {
             drop(app_lock);
             return Err(e).with_context(|| {
                 format!(
-                    "stale lock? try: rm {}/{}.lock",
-                    config.locks_dir.display(),
-                    volume_lock_name(&options.app)
+                    "lock acquisition failed; try: v unlock {}",
+                    options.app
                 )
             });
         }

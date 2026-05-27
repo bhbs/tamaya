@@ -541,23 +541,14 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
     }
 
     let app_lock =
-        LockFile::acquire(&config.locks_dir, &app_lock_name(app)).with_context(|| {
-            format!(
-                "stale lock? try: rm {}/{}.lock",
-                config.locks_dir.display(),
-                app_lock_name(app)
-            )
-        })?;
+        LockFile::acquire(&config.locks_dir, &app_lock_name(app))
+            .with_context(|| format!("lock acquisition failed; try: v unlock {app}"))?;
     let volume_lock = match LockFile::acquire(&config.locks_dir, &volume_lock_name(app)) {
         Ok(lock) => lock,
         Err(e) => {
             drop(app_lock);
             return Err(e).with_context(|| {
-                format!(
-                    "stale lock? try: rm {}/{}.lock",
-                    config.locks_dir.display(),
-                    volume_lock_name(app)
-                )
+                format!("lock acquisition failed; try: v unlock {app}")
             });
         }
     };
@@ -986,9 +977,16 @@ pub fn unlock(app: &str) -> Result<()> {
 
     let mut removed = false;
     for path in [&app_lock_path, &volume_lock_path] {
+        let info = crate::lock::read_lock_info(path);
         match fs::remove_file(path) {
             Ok(()) => {
-                log::info!("unlock: removed {}", path.display());
+                let detail = match (info.pid, info.timestamp) {
+                    (Some(pid), Some(_)) => {
+                        format!(" (held by pid {pid}, {})", info.display_age())
+                    }
+                    _ => String::new(),
+                };
+                log::info!("unlock: removed {}{detail}", path.display());
                 removed = true;
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}

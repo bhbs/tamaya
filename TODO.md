@@ -11,11 +11,7 @@
 - [x] Phase 6: Logging (unified format with timestamps/levels, deploy step logging, worker-aware SSH errors)
 - [x] Phase 7: TAP Management
 - [x] Phase 8: Runtime Directory Stability
-
-## Phase 9: Lock Stability
-
-- [ ] Improve lock-acquisition error messages (show which process holds the lock)
-- [ ] Detect and warn on long-lived lock files
+- [x] Phase 9: Lock Stability (PID+timestamp in lock files, stale detection, unlock shows lock info)
 
 ## Phase 10: Interrupted Deploy Recovery
 
