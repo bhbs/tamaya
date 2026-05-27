@@ -16,13 +16,7 @@
 - [x] Phase 11: Health Check (verified port reuse, configurable timeout, detailed error output)
 - [x] Phase 12: State Consistency (cross-reference local runtime state with actual remote VM state, warn on mismatch)
 - [x] Phase 13: Dry-run Improvements (pre-validate worker connectivity, TAP creation, kernel/rootfs/artifact existence)
-
-## Phase 14: Test Coverage
-
-- [ ] Deploy failure cleanup tests
-- [ ] TAP leak verification tests
-- [ ] Remote rename failure tests
-- [ ] Health check failure → cleanup verification tests
+- [x] Phase 14: Test Coverage (deploy failure cleanup, TAP leak, remote rename, health check failure)
 
 ## Phase 15: Rollback
 

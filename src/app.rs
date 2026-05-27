@@ -85,6 +85,7 @@ struct DeployCleanup {
     registry_file: PathBuf,
     app: String,
     deploy_app: String,
+    disarmed: bool,
 }
 
 impl DeployCleanup {
@@ -104,6 +105,7 @@ impl DeployCleanup {
             registry_file,
             app,
             deploy_app,
+            disarmed: false,
         }
     }
 
@@ -124,6 +126,7 @@ impl DeployCleanup {
         self.worker = None;
         self.ctx = None;
         self.deploy_tap = None;
+        self.disarmed = true;
     }
 }
 
@@ -146,6 +149,9 @@ impl Drop for DeployCleanup {
         }
         if let Some(layout) = self.deploy_layout.take() {
             let _ = layout.remove();
+        }
+        if self.disarmed {
+            return;
         }
         // Best-effort: restore previous registry status
         let old_status = self.old_registry_status.clone();

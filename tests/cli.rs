@@ -899,6 +899,158 @@ fn missing_config_fails() {
     fs::remove_dir_all(project).expect("remove temp project");
 }
 
+#[test]
+fn deploy_failure_during_boot_cleans_up_resources() {
+    let project = initialized_project("deploy-fail-boot");
+    add_worker_config(&project);
+    let local_kernel = project.join("vmlinux");
+    let local_rootfs = project.join("rootfs.ext4");
+    fs::write(&local_kernel, "kernel").expect("write local kernel");
+    fs::write(&local_rootfs, "rootfs").expect("write local rootfs");
+    let fake_ssh = fake_ssh_bin(&project);
+    let fake_ssh_log = project.join("fake-ssh.log");
+
+    let output = v_command(&project)
+        .env("V_SSH_BIN", &fake_ssh)
+        .env("V_FAKE_SSH_LOG", &fake_ssh_log)
+        .env("V_FAKE_REMOTE_RUNTIME", "/tmp/v-fake-runtime/web-deploy")
+        .env("V_FAKE_SSH_FAIL", "boot")
+        .args(["deploy", "web", "--worker", "vps-prod", "--kernel"])
+        .arg(&local_kernel)
+        .args(["--rootfs"])
+        .arg(&local_rootfs)
+        .args(["--skip-health-check"])
+        .output()
+        .expect("run deploy");
+
+    assert!(!output.status.success(), "deploy should fail: {:?}", output);
+
+    assert!(
+        !project.join("runtime/v/web-deploy").exists(),
+        "deploy runtime dir should be cleaned up"
+    );
+
+    let registry = fs::read_to_string(project.join(".local/state/v/registry.toml"))
+        .expect("read registry");
+    assert!(!registry.contains("deploying"), "registry should not be deploying: {registry}");
+
+    let ssh_log = fs::read_to_string(&fake_ssh_log).expect("read fake ssh log");
+    assert!(
+        ssh_log.contains("tuntap del"),
+        "SSH log should contain TAP cleanup (no TAP leak):\n{ssh_log}"
+    );
+    assert!(
+        ssh_log.contains("rm -rf"),
+        "SSH log should contain runtime directory cleanup:\n{ssh_log}"
+    );
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
+#[test]
+fn deploy_health_check_failure_cleans_up_vm() {
+    let project = initialized_project("deploy-fail-health");
+    add_worker_config(&project);
+    let local_kernel = project.join("vmlinux");
+    let local_rootfs = project.join("rootfs.ext4");
+    fs::write(&local_kernel, "kernel").expect("write local kernel");
+    fs::write(&local_rootfs, "rootfs").expect("write local rootfs");
+    let fake_ssh = fake_ssh_bin(&project);
+    let fake_ssh_log = project.join("fake-ssh.log");
+
+    let output = v_command(&project)
+        .env("V_SSH_BIN", &fake_ssh)
+        .env("V_FAKE_SSH_LOG", &fake_ssh_log)
+        .env("V_FAKE_REMOTE_RUNTIME", "/tmp/v-fake-runtime/web-deploy")
+        .env("V_FAKE_SSH_FAIL", "health")
+        .args(["deploy", "web", "--worker", "vps-prod", "--kernel"])
+        .arg(&local_kernel)
+        .args(["--rootfs"])
+        .arg(&local_rootfs)
+        .args([
+            "--health-check-retries",
+            "1",
+            "--health-check-interval-secs",
+            "0",
+        ])
+        .output()
+        .expect("run deploy");
+
+    assert!(!output.status.success(), "deploy should fail: {:?}", output);
+
+    assert!(
+        !project.join("runtime/v/web-deploy").exists(),
+        "deploy runtime dir should be cleaned up"
+    );
+
+    let registry = fs::read_to_string(project.join(".local/state/v/registry.toml"))
+        .expect("read registry");
+    assert!(!registry.contains("deploying"), "registry should not be deploying: {registry}");
+
+    let ssh_log = fs::read_to_string(&fake_ssh_log).expect("read fake ssh log");
+    assert!(
+        ssh_log.contains("kill -TERM"),
+        "SSH log should contain VM stop:\n{ssh_log}"
+    );
+    assert!(
+        ssh_log.contains("tuntap del"),
+        "SSH log should contain TAP cleanup:\n{ssh_log}"
+    );
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
+#[test]
+fn deploy_rename_failure_handles_gracefully() {
+    let project = initialized_project("deploy-fail-rename");
+    add_worker_config(&project);
+    let local_kernel = project.join("vmlinux");
+    let local_rootfs = project.join("rootfs.ext4");
+    fs::write(&local_kernel, "kernel").expect("write local kernel");
+    fs::write(&local_rootfs, "rootfs").expect("write local rootfs");
+    let fake_ssh = fake_ssh_bin(&project);
+    let fake_ssh_log = project.join("fake-ssh.log");
+
+    let output = v_command(&project)
+        .env("V_SSH_BIN", &fake_ssh)
+        .env("V_FAKE_SSH_LOG", &fake_ssh_log)
+        .env("V_FAKE_REMOTE_RUNTIME", "/tmp/v-fake-runtime/web-deploy")
+        .env("V_FAKE_SSH_FAIL", "rename")
+        .args(["deploy", "web", "--worker", "vps-prod", "--kernel"])
+        .arg(&local_kernel)
+        .args(["--rootfs"])
+        .arg(&local_rootfs)
+        .args(["--skip-health-check"])
+        .output()
+        .expect("run deploy");
+
+    assert!(
+        output.status.success(),
+        "deploy should succeed despite rename failure: {:?}",
+        output
+    );
+
+    let state = fs::read_to_string(project.join("runtime/v/web/state.toml"))
+        .expect("read runtime state");
+    assert!(
+        state.contains("deployed (runtime rename failed)"),
+        "state should indicate rename failure: {state}"
+    );
+    assert!(state.contains("status = \"running\""), "state should show running: {state}");
+
+    let registry = fs::read_to_string(project.join(".local/state/v/registry.toml"))
+        .expect("read registry");
+    assert!(registry.contains("status = \"running\""), "registry should show running: {registry}");
+
+    let ssh_log = fs::read_to_string(&fake_ssh_log).expect("read fake ssh log");
+    assert!(
+        ssh_log.contains("/tmp/v-fake-runtime/web-deploy"),
+        "SSH log should contain rename attempt:\n{ssh_log}"
+    );
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
 fn initialized_project(name: &str) -> PathBuf {
     initialized_project_at(&std::env::temp_dir(), name)
 }
@@ -978,15 +1130,35 @@ fn stdout(output: &std::process::Output) -> String {
 
 fn fake_ssh_bin(project: &Path) -> PathBuf {
     let path = project.join("fake-ssh");
-    fs::write(
-        &path,
-        r#"#!/bin/sh
+    let script = r#"#!/bin/sh
 set -eu
 log="${V_FAKE_SSH_LOG:?}"
 remote_runtime="${V_FAKE_REMOTE_RUNTIME:-/tmp/v-fake-runtime/web}"
 pid="${V_FAKE_FIRECRACKER_PID:-4242}"
 
 printf '%s\n' "$*" >> "$log"
+
+# Failure simulation for test scenarios
+fail="${V_FAKE_SSH_FAIL:-}"
+if [ -n "$fail" ]; then
+  case ",$fail," in
+    *,boot,*)
+      case "$*" in *"--api-sock"*) exit 1 ;; esac
+      ;;
+    *,health,*)
+      case "$*" in
+        *"nc -z"*) exit 1 ;;
+        *"--max-time"*) exit 1 ;;
+      esac
+      ;;
+    *,rename,*)
+      case "$*" in
+        *"\$old"*"\$new"*) exit 1 ;;
+        *"\$new"*"\$old"*) exit 1 ;;
+      esac
+      ;;
+  esac
+fi
 
 case "$*" in
   *"firecracker_bin="*"caddy_config_dir="*)
@@ -1048,9 +1220,8 @@ case "$*" in
     :
     ;;
 esac
-"#,
-    )
-    .expect("write fake ssh");
+"#.to_string();
+    fs::write(&path, &script).expect("write fake ssh");
 
     let mut permissions = fs::metadata(&path)
         .expect("read fake ssh metadata")
