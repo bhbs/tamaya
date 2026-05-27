@@ -13,28 +13,6 @@ pub struct Cli {
 pub enum Command {
     /// Initialize local controller directories and config.
     Init,
-    /// Build a Linux worker Firecracker boot plan for an app.
-    Run {
-        app: String,
-        #[arg(long)]
-        worker: Option<String>,
-        #[arg(long)]
-        kernel: PathBuf,
-        #[arg(long)]
-        rootfs: PathBuf,
-        #[arg(long, default_value = "firecracker")]
-        firecracker_bin: PathBuf,
-        #[arg(long, default_value = "tap0")]
-        tap: String,
-        #[arg(long, default_value = "console=ttyS0 reboot=k panic=1 pci=off")]
-        boot_args: String,
-        #[arg(long, default_value_t = 1)]
-        vcpu: u8,
-        #[arg(long, default_value_t = 256)]
-        memory_mib: u32,
-        #[arg(long)]
-        dry_run: bool,
-    },
     /// Check Linux worker readiness and optionally validate remote files.
     Check {
         app: String,
@@ -44,8 +22,8 @@ pub enum Command {
         kernel: Option<PathBuf>,
         #[arg(long)]
         rootfs: Option<PathBuf>,
-        #[arg(long, default_value = "tap0")]
-        tap: String,
+        #[arg(long)]
+        tap: Option<String>,
         #[arg(long)]
         skip_runtime: bool,
         #[arg(long)]
@@ -191,40 +169,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_run_command() {
-        let cli = Cli::try_parse_from([
-            "v",
-            "run",
-            "web",
-            "--kernel",
-            "/kernels/vmlinux",
-            "--rootfs",
-            "/images/web.ext4",
-            "--worker",
-            "vps-prod",
-            "--tap",
-            "tap-web",
-            "--vcpu",
-            "2",
-            "--memory-mib",
-            "512",
-        ])
-        .expect("parse run command");
-
-        assert!(
-            matches!(cli.command, Command::Run { app, worker, kernel, rootfs, tap, vcpu, memory_mib, dry_run, .. }
-                if app == "web"
-                    && worker.as_deref() == Some("vps-prod")
-                    && kernel == Path::new("/kernels/vmlinux")
-                    && rootfs == Path::new("/images/web.ext4")
-                    && tap == "tap-web"
-                    && vcpu == 2
-                    && memory_mib == 512
-                    && !dry_run)
-        );
-    }
-
-    #[test]
     fn parses_check_command() {
         let cli = Cli::try_parse_from(["v", "check", "web", "--worker", "vps-prod"])
             .expect("parse check command");
@@ -246,7 +190,7 @@ mod tests {
                     && worker.as_deref() == Some("vps-prod")
                     && kernel.is_none()
                     && rootfs.is_none()
-                    && tap == "tap0"
+                    && tap.is_none()
                     && !skip_runtime
                     && !skip_capabilities
                     && !skip_kernel
@@ -293,7 +237,7 @@ mod tests {
                     && worker.as_deref() == Some("vps-prod")
                     && kernel.as_deref() == Some(Path::new("/kernels/vmlinux"))
                     && rootfs.as_deref() == Some(Path::new("$XDG_DATA_HOME/v/images/web.ext4"))
-                    && tap == "tap-web"
+                    && tap.as_deref() == Some("tap-web")
                     && skip_runtime
                     && skip_capabilities
                     && skip_kernel

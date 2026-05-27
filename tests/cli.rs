@@ -57,128 +57,6 @@ status = "running"
 }
 
 #[test]
-fn run_prepares_runtime_state_and_boot_requests() {
-    let project = initialized_project("run");
-    add_worker_config(&project);
-
-    let output = v_command(&project)
-        .args([
-            "run",
-            "web",
-            "--kernel",
-            "/kernels/vmlinux",
-            "--rootfs",
-            "/images/web.ext4",
-            "--worker",
-            "vps-prod",
-            "--tap",
-            "tap-web",
-            "--vcpu",
-            "2",
-            "--memory-mib",
-            "512",
-            "--dry-run",
-        ])
-        .output()
-        .expect("run app");
-
-    assert!(output.status.success(), "{output:?}");
-    let stdout = stdout(&output);
-    assert!(stdout.contains("runtime:"));
-    assert!(stdout.contains("worker: vps-prod (deploy@203.0.113.10)"));
-    assert!(stdout.contains(
-        "remote runtime: ${XDG_RUNTIME_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/v/runtime}/v/web"
-    ));
-    assert!(stdout.contains(
-        "api socket: ${XDG_RUNTIME_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/v/runtime}/v/web/firecracker.sock"
-    ));
-    assert!(stdout.contains("api socket:"));
-    assert!(stdout.contains("PUT /machine-config"));
-    assert!(stdout.contains("PUT /boot-source"));
-    assert!(stdout.contains("PUT /drives/rootfs"));
-    assert!(stdout.contains("PUT /network-interfaces/eth0"));
-    assert!(stdout.contains("PUT /actions"));
-
-    let state =
-        fs::read_to_string(project.join("runtime/v/web/state.toml")).expect("read runtime state");
-    assert!(state.contains("app = \"web\""));
-    assert!(state.contains(
-        "api_socket = \"${XDG_RUNTIME_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/v/runtime}/v/web/firecracker.sock\""
-    ));
-    assert!(state.contains("status = \"starting\""));
-    assert!(project.join("runtime/v/web/logs").is_dir());
-
-    fs::remove_dir_all(project).expect("remove temp project");
-}
-
-#[test]
-fn run_with_fake_ssh_boots_remote_firecracker() {
-    let project = initialized_project("run-remote-boot");
-    add_worker_config(&project);
-    let local_kernel = project.join("vmlinux");
-    let local_rootfs = project.join("rootfs.ext4");
-    fs::write(&local_kernel, "kernel").expect("write local kernel");
-    fs::write(&local_rootfs, "rootfs").expect("write local rootfs");
-    let fake_ssh = fake_ssh_bin(&project);
-    let fake_ssh_log = project.join("fake-ssh.log");
-
-    let output = v_command(&project)
-        .env("V_SSH_BIN", &fake_ssh)
-        .env("V_FAKE_SSH_LOG", &fake_ssh_log)
-        .args(["run", "web", "--worker", "vps-prod", "--kernel"])
-        .arg(&local_kernel)
-        .args(["--rootfs"])
-        .arg(&local_rootfs)
-        .args(["--tap", "tap0"])
-        .output()
-        .expect("run app");
-
-    assert!(output.status.success(), "{output:?}");
-    let stdout = stdout(&output);
-    assert!(stdout.contains("worker: vps-prod (deploy@203.0.113.10)"));
-    assert!(stdout.contains("remote runtime: /tmp/v-fake-runtime/web"));
-    assert!(stdout.contains("api socket: /tmp/v-fake-runtime/web/firecracker.sock"));
-    assert!(stdout.contains("kernel: /tmp/v-fake-images/web-kernel-vmlinux"));
-    assert!(stdout.contains("rootfs: /tmp/v-fake-images/web-rootfs-rootfs.ext4"));
-    assert!(stdout.contains("PUT /machine-config"));
-    assert!(stdout.contains("PUT /boot-source"));
-    assert!(stdout.contains("PUT /drives/rootfs"));
-    assert!(stdout.contains("PUT /network-interfaces/eth0"));
-    assert!(stdout.contains("PUT /actions"));
-    assert!(stdout.contains("pid: 4242"));
-
-    let ssh_log = fs::read_to_string(fake_ssh_log).expect("read fake ssh log");
-    assert!(ssh_log.contains("uname -s"));
-    assert!(ssh_log.contains("/dev/kvm"));
-    assert!(ssh_log.contains("XDG_RUNTIME_DIR"));
-    assert!(ssh_log.contains("log_dir=\"$runtime_dir/logs\""));
-    assert!(ssh_log.contains("mkdir -p \"$data_root/images\" \"$data_root/volumes\""));
-    assert!(ssh_log.contains("web-kernel-vmlinux"));
-    assert!(ssh_log.contains("web-rootfs-rootfs.ext4"));
-    assert!(ssh_log.contains("ip tuntap add dev \"$tap\" mode tap"));
-    assert!(ssh_log.contains("ip link set \"$tap\" up"));
-    assert!(ssh_log.contains("/usr/local/bin/firecracker"));
-    assert!(ssh_log.contains("--api-sock"));
-    assert!(ssh_log.contains("curl"));
-    assert!(ssh_log.contains("/machine-config"));
-    assert!(ssh_log.contains("/boot-source"));
-    assert!(ssh_log.contains("/drives/rootfs"));
-    assert!(ssh_log.contains("/network-interfaces/eth0"));
-    assert!(ssh_log.contains("/actions"));
-
-    let state =
-        fs::read_to_string(project.join("runtime/v/web/state.toml")).expect("read runtime state");
-    assert!(state.contains("app = \"web\""));
-    assert!(state.contains("api_socket = \"/tmp/v-fake-runtime/web/firecracker.sock\""));
-    assert!(state.contains("worker = \"vps-prod\""));
-    assert!(state.contains("remote_runtime_dir = \"/tmp/v-fake-runtime/web\""));
-    assert!(state.contains("status = \"running\""));
-    assert!(state.contains("pid = 4242"));
-
-    fs::remove_dir_all(project).expect("remove temp project");
-}
-
-#[test]
 fn check_validates_worker_without_remote_files() {
     let project = initialized_project("check");
     add_worker_config(&project);
@@ -188,14 +66,7 @@ fn check_validates_worker_without_remote_files() {
     let output = v_command(&project)
         .env("V_SSH_BIN", &fake_ssh)
         .env("V_FAKE_SSH_LOG", &fake_ssh_log)
-        .args([
-            "check",
-            "web",
-            "--worker",
-            "vps-prod",
-            "--skip-kernel",
-            "--skip-rootfs",
-        ])
+        .args(["check", "web", "--worker", "vps-prod"])
         .output()
         .expect("check worker");
 
@@ -204,12 +75,10 @@ fn check_validates_worker_without_remote_files() {
     assert!(stdout.contains("worker: vps-prod (deploy@203.0.113.10)"));
     assert!(stdout.contains("remote runtime:"));
     assert!(stdout.contains("api socket:"));
-    assert!(stdout.contains("tap: tap0"));
     assert!(stdout.contains("ok"));
     let ssh_log = fs::read_to_string(fake_ssh_log).expect("read fake ssh log");
     assert!(ssh_log.contains("uname -s"));
-    assert!(ssh_log.contains("tap='\"'\"'tap0'\"'\"'"));
-    assert!(ssh_log.contains("ip link show dev \"$tap\""));
+    assert!(!ssh_log.contains("ip link show dev \"$tap\""));
     assert!(!ssh_log.contains("name='\"'\"'kernel'\"'\"'"));
     assert!(!ssh_log.contains("name='\"'\"'rootfs'\"'\"'"));
 
@@ -255,8 +124,8 @@ fn check_validates_all_remote_prerequisites_by_default() {
 }
 
 #[test]
-fn check_requires_kernel_and_rootfs_unless_skipped() {
-    let project = initialized_project("check-requires-files");
+fn check_does_not_require_boot_files() {
+    let project = initialized_project("check-without-files");
     add_worker_config(&project);
     let fake_ssh = fake_ssh_bin(&project);
     let fake_ssh_log = project.join("fake-ssh.log");
@@ -268,32 +137,13 @@ fn check_requires_kernel_and_rootfs_unless_skipped() {
         .output()
         .expect("check worker");
 
-    assert!(!output.status.success());
-    let stderr = String::from_utf8(output.stderr).expect("stderr is utf-8");
-    assert!(stderr.contains("kernel path is required unless --skip-kernel is passed"));
-
-    fs::remove_dir_all(project).expect("remove temp project");
-}
-
-#[test]
-fn run_rejects_invalid_machine_config() {
-    let project = initialized_project("run-invalid");
-
-    let output = v_command(&project)
-        .args([
-            "run",
-            "web",
-            "--kernel",
-            "/kernels/vmlinux",
-            "--rootfs",
-            "/images/web.ext4",
-            "--vcpu",
-            "0",
-        ])
-        .output()
-        .expect("run app");
-
-    assert!(!output.status.success());
+    assert!(output.status.success(), "{output:?}");
+    let stdout = stdout(&output);
+    assert!(stdout.contains("worker: vps-prod (deploy@203.0.113.10)"));
+    assert!(stdout.contains("ok"));
+    let ssh_log = fs::read_to_string(fake_ssh_log).expect("read fake ssh log");
+    assert!(!ssh_log.contains("name='\"'\"'kernel'\"'\"'"));
+    assert!(!ssh_log.contains("name='\"'\"'rootfs'\"'\"'"));
 
     fs::remove_dir_all(project).expect("remove temp project");
 }

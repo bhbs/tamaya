@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
 const API_SOCKET_FILE: &str = "firecracker.sock";
 const LOG_DIR: &str = "logs";
 const STATE_FILE: &str = "state.toml";
@@ -26,6 +27,7 @@ impl RuntimeLayout {
         &self.app_dir
     }
 
+    #[cfg(test)]
     pub fn api_socket_path(&self) -> PathBuf {
         self.app_dir.join(API_SOCKET_FILE)
     }

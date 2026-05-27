@@ -8,7 +8,6 @@ mod runtime;
 mod ssh;
 
 use anyhow::Result;
-use app::RunOptions;
 use clap::Parser;
 use cli::{Cli, Command};
 
@@ -17,29 +16,6 @@ fn main() -> Result<()> {
 
     match cli.command {
         Command::Init => app::init(),
-        Command::Run {
-            app,
-            worker,
-            kernel,
-            rootfs,
-            firecracker_bin,
-            tap,
-            boot_args,
-            vcpu,
-            memory_mib,
-            dry_run,
-        } => app::run(RunOptions {
-            app,
-            worker,
-            kernel,
-            rootfs,
-            firecracker_bin,
-            tap,
-            boot_args,
-            vcpu,
-            memory_mib,
-            dry_run,
-        }),
         Command::Check {
             app,
             worker,

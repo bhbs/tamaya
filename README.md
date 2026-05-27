@@ -73,7 +73,7 @@ firecracker_bin = "/usr/local/bin/firecracker"
 
 `user`、`port`、`identity_file` は任意。
 
-worker 側も XDG に従う。`v run` は SSH 先で `$XDG_DATA_HOME`、`$XDG_STATE_HOME`、`$XDG_RUNTIME_DIR` を解決し、未設定なら spec の fallback を使う。
+worker 側も XDG に従う。`v deploy` は SSH 先で `$XDG_DATA_HOME`、`$XDG_STATE_HOME`、`$XDG_RUNTIME_DIR` を解決し、未設定なら spec の fallback を使う。
 
 ---
 
@@ -406,7 +406,7 @@ cargo test
 ```bash
 cargo run -- --help
 cargo run -- init --help
-cargo run -- run --help
+cargo run -- check example-app --help
 cargo run -- deploy example-app --help
 cargo run -- rollback example-app --help
 cargo run -- stop example-app --help
@@ -414,30 +414,28 @@ cargo run -- logs example-app --help
 cargo run -- ps --help
 ```
 
-### 4. CLI 引数パースを安全に確認する
+### 4. worker readiness を確認する
 
 ```bash
-cargo run -- run web --kernel /kernels/vmlinux --rootfs /images/web.ext4 --dry-run
+cargo run -- check web --worker vps-prod
 ```
 
-`--dry-run` オプションは、Firecracker 起動を行わずに CLI の引数パースと boot plan 生成を確認するための暫定機能。
+`check` は worker への接続、runtime directory、capability、Caddy の状態を確認する。kernel/rootfs/tap は deploy 時にアップロードまたは作成するため、通常は指定不要。
 
-ここで指定する `/kernels/vmlinux` や `/images/web.ext4` は、本来は SSH 先 Linux worker 上の path として解釈する。Mac ローカルの path ではない。
+必要な場合だけ、worker 側に既にあるファイルや TAP を追加検証できる。
 
-### 5. remote worker 実行の想定
-
-最終的な実行モデルは、Mac から SSH 越しに Linux worker の Firecracker を操作する形。
+### 5. deploy を確認する
 
 例:
 
 ```bash
-cargo run -- run web \
+cargo run -- deploy web \
   --worker vps-prod \
-  --kernel /kernels/vmlinux \
-  --rootfs '${XDG_DATA_HOME:-$HOME/.local/share}/v/images/web.ext4' \
-  --tap tap0 \
+  --kernel ./vmlinux \
+  --rootfs ./web.ext4 \
   --vcpu 1 \
-  --memory-mib 256
+  --memory-mib 256 \
+  --dry-run
 ```
 
 このコマンドは次のことを行います:
@@ -446,20 +444,18 @@ cargo run -- run web \
 - SSH で Linux worker に接続する
 - worker 上の runtime directory に Firecracker API socket を生成する
 - worker 上で `firecracker` プロセスを起動する
+- kernel/rootfs がローカルファイルなら worker にアップロードする
 - ルートファイルシステムを read-only でアタッチ
-- worker 上の TAP ネットワークインターフェースを構成
+- worker 上の TAP ネットワークインターフェースを作成または有効化する
 - microVM をブート
 
 worker 側の前提:
 
 - Linux/KVM が利用できる
 - Firecracker バイナリが worker にインストール済み
-- worker 上に kernel/rootfs image が存在する
 - TAP/bridge/network namespace を作成できる権限がある
 - volume path は worker 上の path
 - reverse proxy reload も worker 上で実行する
-
-非 `--dry-run` 実行時は、boot に進む前に SSH 越しに worker directory 作成と capability check を行う。
 
 確認する内容:
 
@@ -483,50 +479,21 @@ Mac 側の前提:
 - worker 接続設定が XDG config path の `v/config.toml` にある
 - Mac に Firecracker や KVM は不要
 
-### 6. 現在の実装との差分
-
-現在の実装はまだ暫定で、`v run` がローカルで Firecracker バイナリを起動し、ローカル Unix domain socket に直接 API を送る。
-
-これは最終仕様ではない。次に直すべき点:
-
-- `FirecrackerProcess::start` 相当を SSH 上のプロセス起動に置き換える
-- Firecracker API socket への HTTP request を SSH 経由で worker 上から送る
-- runtime state の `pid` と `api_socket` を worker 上の値として保存する
-- `stop` / `logs` / `ps` も worker 越しに実行する
-
-`--worker` と worker config、SSH runner、worker capability check、worker 側 runtime directory 作成、worker 側 runtime/API socket path の組み立ては実装済み。現状で `--firecracker-bin` は過去のローカル起動実装由来の暫定オプション。最終仕様では worker config の `firecracker_bin` を使う。
-
-非 `--dry-run` で実行すると、remote worker 実行が未実装であることを示すエラーになる:
-
-```text
-Error: remote worker execution is not implemented yet; run with --dry-run to inspect the boot plan
-```
-
-### 7. 停止・状態確認する
+### 6. 停止・状態確認する
 
 ```bash
 cargo run -- ps
 cargo run -- stop web
 ```
 
-最終仕様では、`ps` は registry と worker runtime state を照合し、`stop` は SSH 越しに worker 上の Firecracker プロセスを終了して runtime state を削除する。
+`ps` は registry と worker runtime state を照合し、`stop` は SSH 越しに worker 上の Firecracker プロセスを終了して runtime state を削除する。
 
-### 8. まだ実装されていないコマンド
-
-現在の実装では、以下のコマンドは動作を確認できますが、実際の処理はまだスタブです:
-
-- `cargo run -- deploy myapp`
-- `cargo run -- rollback myapp`
-- `cargo run -- logs myapp`
-
-これらは現時点で「未実装」と表示されます。
-
-### 9. サブコマンド構成を確認する
+### 7. サブコマンド構成を確認する
 
 ```bash
 cargo run -- --help
 cargo run -- init --help
-cargo run -- run --help
+cargo run -- check example-app --help
 cargo run -- deploy example-app --help
 cargo run -- rollback example-app --help
 cargo run -- stop example-app --help

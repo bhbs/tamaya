@@ -6,7 +6,7 @@ use crate::firecracker::{
 use crate::lock::{LockFile, app_lock_name, volume_lock_name};
 use crate::registry::{AppStatus, Registry};
 use crate::runtime::{RuntimeLayout, RuntimeState, RuntimeStatus};
-use crate::ssh::{SshRunner, remote_runtime_dir_display, validate_remote_name};
+use crate::ssh::{SshRunner, validate_remote_name};
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
 use std::fs;
@@ -16,26 +16,12 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct RunOptions {
-    pub app: String,
-    pub worker: Option<String>,
-    pub kernel: PathBuf,
-    pub rootfs: PathBuf,
-    pub firecracker_bin: PathBuf,
-    pub tap: String,
-    pub boot_args: String,
-    pub vcpu: u8,
-    pub memory_mib: u32,
-    pub dry_run: bool,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct CheckOptions {
     pub app: String,
     pub worker: Option<String>,
     pub kernel: Option<PathBuf>,
     pub rootfs: Option<PathBuf>,
-    pub tap: String,
+    pub tap: Option<String>,
     pub skip_runtime: bool,
     pub skip_capabilities: bool,
     pub skip_kernel: bool,
@@ -367,79 +353,6 @@ pub fn ps() -> Result<()> {
     Ok(())
 }
 
-pub fn run(options: RunOptions) -> Result<()> {
-    let config = load_config()?;
-    let app = options.app.as_str();
-    validate_remote_name("app", app)?;
-    let _app_lock = LockFile::acquire(&config.locks_dir, &app_lock_name(app))?;
-
-    let layout = RuntimeLayout::from_runtime_dir(&config.runtime_dir, app);
-    layout.create_dirs()?;
-    let worker = resolve_worker(&config, options.worker.as_deref(), options.dry_run)?;
-    let remote_runtime = worker.map(|_| remote_runtime_dir_display(app));
-
-    let plan = BootPlan {
-        machine_config: MachineConfig::new(options.vcpu, options.memory_mib)?,
-        boot_source: BootSource::new(&options.kernel, &options.boot_args)?,
-        rootfs: Drive::rootfs(&options.rootfs, true)?,
-        network_interface: NetworkInterface::new("eth0", &options.tap, None)?,
-    };
-
-    let api_socket_path = remote_runtime
-        .as_deref()
-        .map(|runtime| Path::new(runtime).join("firecracker.sock"))
-        .unwrap_or_else(|| layout.api_socket_path());
-
-    let client = FirecrackerClient::new(&api_socket_path)?;
-    let requests = client.build_boot_requests(&plan)?;
-    let start_request = client.start_instance()?;
-    let mut all_requests = requests.clone();
-    all_requests.push(start_request.clone());
-
-    let mut state = RuntimeState::new(app.to_string(), client.api_socket_path().to_path_buf())
-        .with_status(RuntimeStatus::Starting)
-        .with_status_message("boot plan prepared");
-    if let Some((worker_name, _)) = worker {
-        state = state.with_worker(worker_name.to_string());
-    }
-    if let Some(remote_runtime) = &remote_runtime {
-        state = state.with_remote_runtime_dir(PathBuf::from(remote_runtime));
-    }
-    state.save(&layout.state_file_path())?;
-
-    println!("runtime: {}", layout.app_dir().display());
-    if let Some((name, worker)) = worker {
-        println!("worker: {name} ({})", worker.ssh_target());
-        if let Some(remote_runtime) = &remote_runtime {
-            println!("remote runtime: {remote_runtime}");
-        }
-    }
-    println!("api socket: {}", client.api_socket_path().display());
-    println!("kernel: {}", plan.boot_source.kernel_image_path.display());
-    println!("rootfs: {}", plan.rootfs.path_on_host.display());
-    for request in &requests {
-        println!("{} {}", request.method, request.path);
-    }
-    println!("{} {}", start_request.method, start_request.path);
-
-    if !options.dry_run {
-        let (worker_name, worker) = worker.expect("worker is required for non dry-run");
-        let firecracker_bin = options.firecracker_bin.to_string_lossy().to_string();
-        let params = VmBootParams {
-            kernel: &options.kernel,
-            rootfs: &options.rootfs,
-            firecracker_bin: &firecracker_bin,
-            tap: &options.tap,
-            boot_args: &options.boot_args,
-            vcpu: options.vcpu,
-            memory_mib: options.memory_mib,
-        };
-        boot_vm_on_worker(app, worker, worker_name, &params, &layout)?;
-    }
-
-    Ok(())
-}
-
 pub fn check(options: CheckOptions) -> Result<()> {
     let config = load_config()?;
     let app = options.app.as_str();
@@ -458,25 +371,29 @@ pub fn check(options: CheckOptions) -> Result<()> {
     let kernel = if options.skip_kernel {
         None
     } else {
-        let kernel = options
+        options
             .kernel
             .as_deref()
-            .context("kernel path is required unless --skip-kernel is passed")?;
-        Some(runner.require_readable_file("kernel", kernel)?)
+            .map(|kernel| runner.require_readable_file("kernel", kernel))
+            .transpose()?
     };
     let rootfs = if options.skip_rootfs {
         None
     } else {
-        let rootfs = options
+        options
             .rootfs
             .as_deref()
-            .context("rootfs path is required unless --skip-rootfs is passed")?;
-        Some(runner.require_readable_file("rootfs", rootfs)?)
+            .map(|rootfs| runner.require_readable_file("rootfs", rootfs))
+            .transpose()?
     };
     let tap = if options.skip_tap {
         None
     } else {
-        Some(runner.require_tap_interface(&options.tap)?)
+        options
+            .tap
+            .as_deref()
+            .map(|tap| runner.require_tap_interface(tap))
+            .transpose()?
     };
 
     match runner.check_caddy() {

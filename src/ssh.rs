@@ -347,7 +347,8 @@ impl SshRunner {
     }
 }
 
-pub fn remote_runtime_dir_display(app: &str) -> String {
+#[cfg(test)]
+fn remote_runtime_dir_display(app: &str) -> String {
     format!("${{XDG_RUNTIME_DIR:-${{XDG_STATE_HOME:-$HOME/.local/state}}/v/runtime}}/v/{app}")
 }
 
