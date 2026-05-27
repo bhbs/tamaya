@@ -357,6 +357,168 @@ fn stub_commands_load_config_and_take_locks() {
 }
 
 #[test]
+fn logs_reports_when_app_not_running() {
+    let project = initialized_project("logs-no-state");
+
+    let output = v_command(&project)
+        .args(["logs", "web"])
+        .output()
+        .expect("run logs");
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(stdout(&output), "logs: web is not running\n");
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
+#[test]
+fn logs_streams_remote_logs_over_ssh() {
+    let project = initialized_project("logs-remote");
+    add_worker_config(&project);
+    let fake_ssh = fake_ssh_bin(&project);
+    let fake_ssh_log = project.join("fake-ssh.log");
+    let runtime_dir = project.join("runtime/v/web");
+    fs::create_dir_all(runtime_dir.join("logs")).expect("create local runtime");
+    fs::write(
+        runtime_dir.join("state.toml"),
+        r#"app = "web"
+pid = 4242
+api_socket = "/tmp/v-fake-runtime/web/firecracker.sock"
+worker = "vps-prod"
+remote_runtime_dir = "/tmp/v-fake-runtime/web"
+status = "running"
+status_message = "booted"
+"#,
+    )
+    .expect("write runtime state");
+
+    let output = v_command(&project)
+        .env("V_SSH_BIN", &fake_ssh)
+        .env("V_FAKE_SSH_LOG", &fake_ssh_log)
+        .args(["logs", "web"])
+        .output()
+        .expect("run logs");
+
+    assert!(output.status.success(), "{output:?}");
+
+    let ssh_log = fs::read_to_string(fake_ssh_log).expect("read fake ssh log");
+    assert!(ssh_log.contains("/tmp/v-fake-runtime/web/logs"));
+    assert!(ssh_log.contains("cat"));
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
+#[test]
+fn ps_shows_runtime_state_for_apps() {
+    let project = initialized_project("ps-runtime");
+    add_worker_config(&project);
+    let runtime_dir = project.join("runtime/v/web");
+    fs::create_dir_all(runtime_dir.join("logs")).expect("create local runtime");
+    fs::write(
+        runtime_dir.join("state.toml"),
+        r#"app = "web"
+pid = 4242
+api_socket = "/tmp/v-fake-runtime/web/firecracker.sock"
+worker = "vps-prod"
+remote_runtime_dir = "/tmp/v-fake-runtime/web"
+status = "running"
+status_message = "booted"
+"#,
+    )
+    .expect("write runtime state");
+
+    let current_pid = std::process::id();
+    fs::create_dir_all(project.join("runtime/v/api/logs")).expect("create api runtime");
+    fs::write(
+        project.join("runtime/v/api/state.toml"),
+        format!(
+            r#"app = "api"
+pid = {current_pid}
+api_socket = "/tmp/v-fake-runtime/api/firecracker.sock"
+status = "starting"
+"#,
+        ),
+    )
+    .expect("write api runtime state");
+
+    let output = v_command(&project).arg("ps").output().expect("run ps");
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = stdout(&output);
+    assert!(stdout.contains("api\tStarting\t-\t"));
+    assert!(stdout.contains("web\tRunning\tvps-prod\t4242\t/tmp/v-fake-runtime/web"));
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
+#[test]
+fn ps_cleans_up_stale_runtime_state() {
+    let project = initialized_project("ps-stale");
+    let runtime_dir = project.join("runtime/v/stale-app");
+    fs::create_dir_all(runtime_dir.join("logs")).expect("create runtime");
+    fs::write(
+        runtime_dir.join("state.toml"),
+        r#"app = "stale-app"
+pid = 99999
+api_socket = "/tmp/socket"
+status = "running"
+"#,
+    )
+    .expect("write stale state");
+
+    let output = v_command(&project).arg("ps").output().expect("run ps");
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = stdout(&output);
+    assert!(!stdout.contains("stale-app"));
+    assert!(stdout.contains("cleaned up"));
+    assert!(!runtime_dir.exists());
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
+#[test]
+fn ps_shows_both_runtime_and_registry_apps() {
+    let project = initialized_project("ps-mixed");
+    add_worker_config(&project);
+
+    fs::write(
+        project.join(".local/state/v/registry.toml"),
+        r#"[apps.registry-only]
+current_image = "/images/reg.ext4"
+volume_path = "/volumes/reg"
+port = 8080
+status = "running"
+"#,
+    )
+    .expect("write registry");
+
+    let current_pid = std::process::id();
+    let runtime_dir = project.join("runtime/v/runtime-app");
+    fs::create_dir_all(runtime_dir.join("logs")).expect("create runtime");
+    fs::write(
+        runtime_dir.join("state.toml"),
+        format!(
+            r#"app = "runtime-app"
+pid = {current_pid}
+api_socket = "/tmp/sock"
+status = "starting"
+"#,
+        ),
+    )
+    .expect("write runtime state");
+
+    let output = v_command(&project).arg("ps").output().expect("run ps");
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = stdout(&output);
+    assert!(stdout.contains("runtime-app\tStarting"));
+    assert!(stdout.contains("registry-only\tRunning\t8080"));
+
+    fs::remove_dir_all(project).expect("remove temp project");
+}
+
+#[test]
 fn missing_config_fails() {
     let project = temp_project_dir("missing-config");
 

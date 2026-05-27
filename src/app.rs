@@ -7,8 +7,9 @@ use crate::registry::Registry;
 use crate::runtime::{RuntimeLayout, RuntimeState, RuntimeStatus};
 use crate::ssh::{SshRunner, remote_runtime_dir_display, validate_remote_name};
 use anyhow::{Context, Result, bail};
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct RunOptions {
@@ -54,14 +55,47 @@ pub fn init() -> Result<()> {
 pub fn ps() -> Result<()> {
     let config = load_config()?;
     let registry = Registry::load(&config.registry_file)?;
+    let runtime_entries = crate::runtime::list_runtime_entries(&config.runtime_dir)?;
+    let mut cleaned = 0u32;
 
-    if registry.apps.is_empty() {
+    if registry.apps.is_empty() && runtime_entries.is_empty() {
         println!("no apps");
         return Ok(());
     }
 
-    for (name, app) in registry.apps {
-        println!("{name}\t{:?}\t{}", app.status, app.port);
+    for (name, state) in &runtime_entries {
+        if is_process_stale(state) {
+            let layout = RuntimeLayout::from_runtime_dir(&config.runtime_dir, name);
+            if layout.remove().is_ok() {
+                cleaned += 1;
+            }
+            continue;
+        }
+
+        let worker = state.worker.as_deref().unwrap_or("-");
+        let pid = state
+            .pid
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| "-".to_string());
+        let runtime = state
+            .remote_runtime_dir
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "-".to_string());
+        println!("{name}\t{:?}\t{worker}\t{pid}\t{runtime}", state.status);
+    }
+
+    for (name, app) in &registry.apps {
+        if !runtime_entries.contains_key(name) {
+            println!("{name}\t{:?}\t{}", app.status, app.port);
+        }
+    }
+
+    if cleaned > 0 {
+        println!(
+            "cleaned up {cleaned} stale runtime entr{}",
+            if cleaned == 1 { "y" } else { "ies" }
+        );
     }
 
     Ok(())
@@ -333,11 +367,62 @@ pub fn stop(app: &str) -> Result<()> {
 }
 
 pub fn logs(app: &str) -> Result<()> {
-    let _config = load_config()?;
+    let config = load_config()?;
+    let layout = RuntimeLayout::from_runtime_dir(&config.runtime_dir, app);
 
-    println!("logs: showing logs for {app} is not implemented yet");
+    let state = match RuntimeState::load(&layout.state_file_path()) {
+        Ok(state) => state,
+        Err(error) if is_not_found_error(&error) => {
+            println!("logs: {app} is not running");
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
+
+    if let Some(worker_name) = &state.worker {
+        let remote_runtime_dir = state
+            .remote_runtime_dir
+            .as_ref()
+            .context("remote runtime directory not found in state")?;
+        let (_, worker) = config.worker(Some(worker_name))?;
+        let runner = SshRunner::new(worker.clone());
+        runner.stream_logs(&remote_runtime_dir.join("logs"))?;
+    } else {
+        let log_dir = layout.log_dir();
+        if log_dir.is_dir() {
+            for entry in fs::read_dir(&log_dir)? {
+                let entry = entry?;
+                if entry.file_type()?.is_file() {
+                    let path = entry.path();
+                    if let Some(filename) = path.file_name() {
+                        println!("=== {} ===", filename.to_string_lossy());
+                    }
+                    let content = fs::read_to_string(&path)?;
+                    print!("{content}");
+                }
+            }
+        } else {
+            println!("logs: no logs found for {app}");
+        }
+    }
 
     Ok(())
+}
+
+fn is_process_stale(state: &RuntimeState) -> bool {
+    if state.worker.is_some() {
+        return false;
+    }
+    if let Some(pid) = state.pid {
+        let status = Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        return !matches!(status, Ok(s) if s.success());
+    }
+    false
 }
 
 fn load_config() -> Result<Config> {

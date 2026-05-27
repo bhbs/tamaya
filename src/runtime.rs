@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -146,6 +147,29 @@ impl RuntimeState {
     }
 }
 
+pub fn list_runtime_entries(runtime_dir: &Path) -> Result<BTreeMap<String, RuntimeState>> {
+    let mut entries = BTreeMap::new();
+    if !runtime_dir.is_dir() {
+        return Ok(entries);
+    }
+    for entry in fs::read_dir(runtime_dir).context(format!(
+        "failed to read runtime directory {}",
+        runtime_dir.display()
+    ))? {
+        let entry = entry.context("failed to read runtime directory entry")?;
+        if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+            let app_name = entry.file_name().to_string_lossy().into_owned();
+            let state_file = entry.path().join(STATE_FILE);
+            if state_file.is_file()
+                && let Ok(state) = RuntimeState::load(&state_file)
+            {
+                entries.insert(app_name, state);
+            }
+        }
+    }
+    Ok(entries)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,6 +258,44 @@ mod tests {
         assert!(RuntimeState::load(&invalid).is_err());
 
         fs::remove_dir_all(root).expect("remove temp project");
+    }
+
+    #[test]
+    fn list_runtime_entries_returns_states_from_directory() {
+        let root = temp_project_dir("runtime-list");
+        let runtime_dir = root.join(".v/runtime");
+        fs::create_dir_all(&runtime_dir).unwrap();
+
+        let app_web = RuntimeLayout::from_runtime_dir(&runtime_dir, "web");
+        let app_api = RuntimeLayout::from_runtime_dir(&runtime_dir, "api");
+        app_web.create_dirs().unwrap();
+        app_api.create_dirs().unwrap();
+
+        let state_web = RuntimeState::for_layout(&app_web)
+            .with_status(RuntimeStatus::Running)
+            .with_status_message("booted");
+        state_web.save(&app_web.state_file_path()).unwrap();
+
+        let state_api = RuntimeState::for_layout(&app_api).with_status(RuntimeStatus::Starting);
+        state_api.save(&app_api.state_file_path()).unwrap();
+
+        let entries = list_runtime_entries(&runtime_dir).expect("list entries");
+
+        assert_eq!(entries.len(), 2);
+        assert!(entries.contains_key("web"));
+        assert!(entries.contains_key("api"));
+        assert_eq!(entries["web"].status, RuntimeStatus::Running);
+        assert_eq!(entries["api"].status, RuntimeStatus::Starting);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn list_runtime_entries_skips_missing_directory() {
+        let entries =
+            list_runtime_entries(Path::new("/nonexistent/runtime/path")).expect("list entries");
+
+        assert!(entries.is_empty());
     }
 
     fn temp_project_dir(name: &str) -> PathBuf {

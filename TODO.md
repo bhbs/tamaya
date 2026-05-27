@@ -40,11 +40,11 @@
 
 ## Phase 3: VM Lifecycle
 
-- Implement `v ps`.
-- Implement `v stop <app>`.
-- Track worker host, PID, socket path, and runtime directory.
-- Clean up stale runtime state.
-- Implement `v logs <app>`.
+- [x] Implement `v ps`.
+- [x] Implement `v stop <app>`.
+- [x] Track worker host, PID, socket path, and runtime directory.
+- [x] Clean up stale runtime state.
+- [x] Implement `v logs <app>`.
 
 ## Phase 4: Volumes
 

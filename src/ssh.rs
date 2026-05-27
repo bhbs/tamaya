@@ -226,6 +226,24 @@ impl SshRunner {
 
         Ok(())
     }
+
+    pub fn stream_logs(&self, remote_log_dir: &Path) -> Result<()> {
+        let remote_log_dir = path_to_remote_string(remote_log_dir)?;
+        self.stream_shell(&logs_script(&remote_log_dir))
+            .context("failed to stream remote logs")?;
+        Ok(())
+    }
+
+    pub fn stream_shell(&self, script: &str) -> Result<()> {
+        let status = self
+            .shell_command(script)
+            .status()
+            .context("failed to run ssh stream command")?;
+        if !status.success() {
+            bail!("ssh stream command failed with status {}", status);
+        }
+        Ok(())
+    }
 }
 
 pub fn remote_runtime_dir_display(app: &str) -> String {
@@ -472,6 +490,23 @@ mkdir -p "$data_root/images" "$data_root/volumes" "$state_root" "$runtime_dir" "
 printf '%s\n' "$runtime_dir"
 "#,
         app = shell_escape_for_double_quotes(app)
+    )
+}
+
+fn logs_script(log_dir: &str) -> String {
+    format!(
+        r#"set -eu
+log_dir={log_dir}
+if [ -d "$log_dir" ]; then
+  for log in "$log_dir"/*.log; do
+    if [ -f "$log" ]; then
+      printf '=== %s ===\n' "$(basename "$log")"
+      cat "$log"
+    fi
+  done
+fi
+"#,
+        log_dir = shell_quote(log_dir)
     )
 }
 
