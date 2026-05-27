@@ -60,6 +60,7 @@ pub struct DeployOptions {
     pub health_check_path: Option<String>,
     pub health_check_retries: u32,
     pub health_check_interval_secs: u32,
+    pub health_check_timeout_secs: u32,
     pub drain_seconds: u32,
     pub skip_health_check: bool,
     pub dry_run: bool,
@@ -566,6 +567,10 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
         .get(app)
         .map(|entry| entry.port)
         .unwrap_or(8080u16);
+    log::info!(
+        "deploy: resolved port {} (old VM port, reused for new VM)",
+        old_port
+    );
 
     let is_deploying = registry
         .apps
@@ -663,6 +668,15 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
         log::info!("  vcpu: {}", options.vcpu);
         log::info!("  memory_mib: {}", options.memory_mib);
         log::info!("  health check host: {}", options.health_check_host);
+        if let Some(ref path) = options.health_check_path {
+            log::info!("  health check path: {path}");
+        }
+        log::info!(
+            "  health check: {} retries, {}s interval, {}s timeout",
+            options.health_check_retries,
+            options.health_check_interval_secs,
+            options.health_check_timeout_secs,
+        );
         if let Some(ref domain) = options.domain {
             let proxy_target = format!("{}:{}", options.health_check_host, old_port);
             log::info!("  would update reverse proxy: {domain} → {proxy_target}");
@@ -788,6 +802,7 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
 
     // Health checks
     log::info!("deploy: starting health checks");
+    let mut last_error: Option<anyhow::Error> = None;
     let mut health_ok = options.skip_health_check;
     if health_ok {
         log::info!("deploy: health check skipped (--skip-health-check)");
@@ -805,9 +820,18 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
             }
             let runner = SshRunner::new(worker.clone());
             let result = if let Some(ref path) = options.health_check_path {
-                runner.http_health_check(&options.health_check_host, old_port, path)
+                runner.http_health_check(
+                    &options.health_check_host,
+                    old_port,
+                    path,
+                    options.health_check_timeout_secs,
+                )
             } else {
-                runner.health_check(&options.health_check_host, old_port)
+                runner.health_check(
+                    &options.health_check_host,
+                    old_port,
+                    options.health_check_timeout_secs,
+                )
             };
             match result {
                 Ok(()) => {
@@ -817,15 +841,19 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
                         options.health_check_retries
                     );
                     health_ok = true;
+                    last_error = None;
                     break;
                 }
-                Err(_) if i + 1 == options.health_check_retries => {}
-                Err(_) => {
+                Err(e) if i + 1 == options.health_check_retries => {
+                    last_error = Some(e);
+                }
+                Err(e) => {
                     log::warn!(
-                        "deploy: health check attempt {}/{} failed",
+                        "deploy: health check attempt {}/{} failed: {e:#}",
                         i + 1,
                         options.health_check_retries
                     );
+                    last_error = Some(e);
                 }
             }
         }
@@ -835,6 +863,9 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
         let runner = SshRunner::new(worker.clone());
         if let Err(e) = runner.stream_logs(&ctx.remote_runtime_dir.join("logs")) {
             log::error!("deploy: failed to read remote VM logs: {e:#}");
+        }
+        if let Some(ref e) = last_error {
+            log::error!("deploy: last health check error: {e:#}");
         }
         bail!(
             "deploy: health check failed after {} retries",

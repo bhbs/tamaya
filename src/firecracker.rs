@@ -11,6 +11,7 @@ const MAX_BOOT_ARGS_BYTES: usize = 4096;
 pub struct MachineConfig {
     pub vcpu_count: u8,
     pub mem_size_mib: u32,
+    #[serde(rename = "smt")]
     pub ht_enabled: bool,
 }
 
@@ -29,13 +30,6 @@ impl MachineConfig {
             mem_size_mib,
             ht_enabled: false,
         })
-    }
-
-    fn to_json(&self) -> String {
-        format!(
-            r#"{{"vcpu_count":{},"mem_size_mib":{},"smt":{}}}"#,
-            self.vcpu_count, self.mem_size_mib, self.ht_enabled
-        )
     }
 }
 
@@ -62,14 +56,6 @@ impl BootSource {
         validate_path("kernel_image_path", &self.kernel_image_path)?;
         validate_bounded("boot_args", &self.boot_args, MAX_BOOT_ARGS_BYTES)?;
         Ok(())
-    }
-
-    fn to_json(&self) -> String {
-        format!(
-            r#"{{"kernel_image_path":"{}","boot_args":"{}"}}"#,
-            json_escape(&path_to_string(&self.kernel_image_path)),
-            json_escape(&self.boot_args)
-        )
     }
 }
 
@@ -109,16 +95,6 @@ impl Drive {
         validate_path("path_on_host", &self.path_on_host)?;
         Ok(())
     }
-
-    fn to_json(&self) -> String {
-        format!(
-            r#"{{"drive_id":"{}","path_on_host":"{}","is_root_device":{},"is_read_only":{}}}"#,
-            json_escape(&self.drive_id),
-            json_escape(&path_to_string(&self.path_on_host)),
-            self.is_root_device,
-            self.is_read_only
-        )
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,20 +128,6 @@ impl NetworkInterface {
         }
 
         Ok(())
-    }
-
-    fn to_json(&self) -> String {
-        let guest_mac = match &self.guest_mac {
-            Some(guest_mac) => format!(r#","guest_mac":"{}""#, json_escape(guest_mac)),
-            None => String::new(),
-        };
-
-        format!(
-            r#"{{"iface_id":"{}","host_dev_name":"{}"{}}}"#,
-            json_escape(&self.iface_id),
-            json_escape(&self.host_dev_name),
-            guest_mac
-        )
     }
 }
 
@@ -217,14 +179,15 @@ impl FirecrackerClient {
         &self.api_socket_path
     }
 
-    pub fn put_machine_config(&self, machine_config: &MachineConfig) -> UnixHttpRequest {
-        UnixHttpRequest::new("PUT", "/machine-config", machine_config.to_json())
-            .expect("machine config request body is bounded")
+    pub fn put_machine_config(&self, machine_config: &MachineConfig) -> Result<UnixHttpRequest> {
+        let body = serde_json::to_string(machine_config)?;
+        UnixHttpRequest::new("PUT", "/machine-config", body)
     }
 
     pub fn put_boot_source(&self, boot_source: &BootSource) -> Result<UnixHttpRequest> {
         boot_source.validate()?;
-        UnixHttpRequest::new("PUT", "/boot-source", boot_source.to_json())
+        let body = serde_json::to_string(boot_source)?;
+        UnixHttpRequest::new("PUT", "/boot-source", body)
     }
 
     pub fn put_rootfs_drive(&self, drive: &Drive) -> Result<UnixHttpRequest> {
@@ -239,26 +202,24 @@ impl FirecrackerClient {
 
     pub fn put_drive(&self, drive: &Drive) -> Result<UnixHttpRequest> {
         drive.validate()?;
+        let body = serde_json::to_string(drive)?;
 
-        UnixHttpRequest::new(
-            "PUT",
-            format!("/drives/{}", drive.drive_id),
-            drive.to_json(),
-        )
+        UnixHttpRequest::new("PUT", format!("/drives/{}", drive.drive_id), body)
     }
 
     pub fn put_network_interface(&self, interface: &NetworkInterface) -> Result<UnixHttpRequest> {
         interface.validate()?;
+        let body = serde_json::to_string(interface)?;
         UnixHttpRequest::new(
             "PUT",
             format!("/network-interfaces/{}", interface.iface_id),
-            interface.to_json(),
+            body,
         )
     }
 
     pub fn build_boot_requests(&self, plan: &BootPlan) -> Result<Vec<UnixHttpRequest>> {
         let mut requests = vec![
-            self.put_machine_config(&plan.machine_config),
+            self.put_machine_config(&plan.machine_config)?,
             self.put_boot_source(&plan.boot_source)?,
             self.put_rootfs_drive(&plan.rootfs)?,
         ];
@@ -307,26 +268,6 @@ fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-fn json_escape(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-
-    for ch in value.chars() {
-        match ch {
-            '"' => escaped.push_str("\\\""),
-            '\\' => escaped.push_str("\\\\"),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            ch if ch.is_control() => {
-                escaped.push_str(&format!("\\u{:04x}", ch as u32));
-            }
-            ch => escaped.push(ch),
-        }
-    }
-
-    escaped
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,7 +294,9 @@ mod tests {
     #[test]
     fn builds_machine_config_request_payload() {
         let client = FirecrackerClient::new("/tmp/firecracker.socket").unwrap();
-        let request = client.put_machine_config(&MachineConfig::new(2, 512).unwrap());
+        let request = client
+            .put_machine_config(&MachineConfig::new(2, 512).unwrap())
+            .unwrap();
 
         assert_eq!(request.method, "PUT");
         assert_eq!(request.path, "/machine-config");
@@ -421,12 +364,12 @@ mod tests {
     }
 
     #[test]
-    fn escapes_json_strings_without_external_dependencies() {
+    fn serializes_boot_source_via_serde_json() {
         let source =
             BootSource::new("/kernels/firecracker", "console=\"ttyS0\"\nreboot=k").unwrap();
 
         assert_eq!(
-            source.to_json(),
+            serde_json::to_string(&source).unwrap(),
             r#"{"kernel_image_path":"/kernels/firecracker","boot_args":"console=\"ttyS0\"\nreboot=k"}"#
         );
     }
@@ -516,10 +459,11 @@ mod tests {
     }
 
     #[test]
-    fn escapes_all_json_special_cases() {
+    fn serde_json_escapes_special_characters() {
+        let input = serde_json::Value::String("\"\\\n\r\t\u{0007}".to_string());
         assert_eq!(
-            json_escape("\"\\\n\r\t\u{0007}"),
-            "\\\"\\\\\\n\\r\\t\\u0007"
+            serde_json::to_string(&input).unwrap(),
+            r#""\"\\\n\r\t\u0007""#
         );
     }
 }

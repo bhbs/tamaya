@@ -373,17 +373,23 @@ impl SshRunner {
         Ok(())
     }
 
-    pub fn health_check(&self, host: &str, port: u16) -> Result<()> {
+    pub fn health_check(&self, host: &str, port: u16, timeout_secs: u32) -> Result<()> {
         validate_remote_name("health_check_host", host)?;
-        self.run_shell(&health_check_script(host, port))
+        self.run_shell(&health_check_script(host, port, timeout_secs))
             .context(format!("health check failed for {host}:{port}"))
             .map(|_| ())
     }
 
-    pub fn http_health_check(&self, host: &str, port: u16, path: &str) -> Result<()> {
+    pub fn http_health_check(
+        &self,
+        host: &str,
+        port: u16,
+        path: &str,
+        timeout_secs: u32,
+    ) -> Result<()> {
         validate_remote_name("health_check_host", host)?;
         validate_remote_name("health_check_path", path)?;
-        self.run_shell(&http_health_check_script(host, port, path))
+        self.run_shell(&http_health_check_script(host, port, path, timeout_secs))
             .context(format!(
                 "HTTP health check failed for http://{host}:{port}{path}"
             ))
@@ -744,19 +750,24 @@ fn validate_remote_path_value(name: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-fn health_check_script(host: &str, port: u16) -> String {
+fn health_check_script(host: &str, port: u16, timeout_secs: u32) -> String {
     render_ssh_script(
         ssh_script!("health_check.sh"),
-        &[("host", shell_quote(host)), ("port", port.to_string())],
+        &[
+            ("host", shell_quote(host)),
+            ("port", port.to_string()),
+            ("timeout", timeout_secs.to_string()),
+        ],
     )
 }
 
-fn http_health_check_script(host: &str, port: u16, path: &str) -> String {
+fn http_health_check_script(host: &str, port: u16, path: &str, timeout_secs: u32) -> String {
     render_ssh_script(
         ssh_script!("http_health_check.sh"),
         &[
             ("host", shell_quote(host)),
             ("port", port.to_string()),
+            ("timeout", timeout_secs.to_string()),
             (
                 "path_clean",
                 shell_escape_for_double_quotes(path.trim_start_matches('/')),
@@ -1044,26 +1055,28 @@ mod tests {
 
     #[test]
     fn builds_health_check_script() {
-        let script = health_check_script("10.0.0.2", 8080);
+        let script = health_check_script("10.0.0.2", 8080, 5);
 
         assert!(script.contains("host='10.0.0.2'"));
         assert!(script.contains("port=8080"));
-        assert!(script.contains("nc -z -w 5 \"$host\" \"$port\""));
+        assert!(script.contains("timeout=5"));
+        assert!(script.contains("nc -z -w \"$timeout\" \"$host\" \"$port\""));
     }
 
     #[test]
     fn builds_http_health_check_script() {
-        let script = http_health_check_script("10.0.0.2", 8080, "/health");
+        let script = http_health_check_script("10.0.0.2", 8080, "/health", 10);
 
         assert!(script.contains("host='10.0.0.2'"));
         assert!(script.contains("port=8080"));
+        assert!(script.contains("timeout=10"));
         assert!(script.contains("path=/health"));
-        assert!(script.contains("curl -sf --max-time 10 \"http://$host:$port$path\""));
+        assert!(script.contains("curl -sS --max-time \"$timeout\""));
     }
 
     #[test]
     fn http_health_check_strips_leading_slash_from_path() {
-        let script = http_health_check_script("10.0.0.2", 3000, "/health");
+        let script = http_health_check_script("10.0.0.2", 3000, "/health", 10);
 
         assert!(script.contains("path=/health"));
     }

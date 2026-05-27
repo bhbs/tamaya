@@ -13,12 +13,7 @@
 - [x] Phase 8: Runtime Directory Stability
 - [x] Phase 9: Lock Stability (PID+timestamp in lock files, stale detection, unlock shows lock info)
 - [x] Phase 10: Interrupted Deploy Recovery (stale Deploying auto-recovery, DeployCleanup drop-guard cleans remote TAP + runtime dir)
-
-## Phase 11: Health Check
-
-- [ ] Verify assumption that old/new VMs reuse the same port (`old_port`)
-- [ ] Add configurable health check timeout
-- [ ] Show detailed error output on HTTP health check failures
+- [x] Phase 11: Health Check (verified port reuse, configurable timeout, detailed error output)
 
 ## Phase 12: State Consistency (`v ps`)
 

@@ -10,6 +10,7 @@ pub struct Cli {
 }
 
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
     /// Initialize local controller directories and config.
     Init,
@@ -89,6 +90,8 @@ pub enum Command {
         health_check_retries: u32,
         #[arg(long, default_value_t = 2)]
         health_check_interval_secs: u32,
+        #[arg(long, default_value_t = 10)]
+        health_check_timeout_secs: u32,
         #[arg(long, default_value_t = 5)]
         drain_seconds: u32,
         #[arg(long)]
