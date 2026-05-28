@@ -2,6 +2,7 @@ use crate::config::WorkerConfig;
 use crate::firecracker::UnixHttpRequest;
 use crate::progress::{self, ProgressReader};
 use anyhow::{Context, Result, bail};
+use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 use std::fs::File;
 use std::io;
@@ -117,6 +118,18 @@ impl SshRunner {
             .and_then(|value| value.to_str())
             .context("local boot file must have a UTF-8 file name")?;
         validate_remote_name("filename", filename)?;
+
+        if kind == "kernel" {
+            let local_hash = compute_local_sha256(local_path)?;
+            let (remote_hash_opt, remote_path) =
+                self.compute_remote_image_sha256(app, kind, filename)?;
+            if let Some(remote_hash) = remote_hash_opt
+                && remote_hash == local_hash
+            {
+                log::info!(target: "upload", "skipping kernel upload (hash match: {remote_hash})");
+                return Ok(remote_path);
+            }
+        }
 
         let pb = {
             let meta = std::fs::metadata(local_path).ok();
@@ -508,6 +521,35 @@ impl SshRunner {
         .context("failed to install worker prerequisites")?;
         Ok(())
     }
+
+    pub fn compute_remote_image_sha256(
+        &self,
+        app: &str,
+        kind: &str,
+        filename: &str,
+    ) -> Result<(Option<String>, String)> {
+        let output = self
+            .run_shell(&compute_image_sha256_script(app, kind, filename))
+            .context("failed to compute remote image sha256")?;
+        let stdout = String::from_utf8(output.stdout).context("ssh stdout is not utf-8")?;
+        let mut lines = stdout.lines();
+        let hash = lines.next().context("remote sha256 hash not reported")?.trim().to_string();
+        let path = lines.next().context("remote path not reported")?.trim().to_string();
+        if hash == "missing" || hash.is_empty() {
+            Ok((None, path))
+        } else {
+            Ok((Some(hash), path))
+        }
+    }
+}
+
+fn compute_local_sha256(path: &Path) -> Result<String> {
+    let mut file = File::open(path)
+        .context(format!("failed to open {} for hashing", path.display()))?;
+    let mut hasher = Sha256::new();
+    io::copy(&mut file, &mut hasher)
+        .context(format!("failed to hash {}", path.display()))?;
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 #[cfg(test)]
@@ -658,6 +700,17 @@ fn upload_artifact_tar_script(app: &str) -> String {
     render_ssh_script(
         ssh_script!("upload_artifact_tar.sh"),
         &[("app", shell_escape_for_double_quotes(app))],
+    )
+}
+
+fn compute_image_sha256_script(app: &str, kind: &str, filename: &str) -> String {
+    render_ssh_script(
+        ssh_script!("compute_image_sha256.sh"),
+        &[
+            ("app", shell_escape_for_double_quotes(app)),
+            ("kind", shell_escape_for_double_quotes(kind)),
+            ("filename", shell_escape_for_double_quotes(filename)),
+        ],
     )
 }
 

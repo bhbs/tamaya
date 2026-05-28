@@ -1171,10 +1171,11 @@ if [ -n "$fail" ]; then
 fi
 
 case "$*" in
-  *"firecracker_bin="*"caddy_config_dir="*)
-    printf '%s\n' "install_worker_prerequisites"
+  *"sha256sum"*)
+    printf '%s\n' "dummyf00000000000000000000000000000000000000000000000000000000000"
+    printf '%s\n' "/tmp/v-fake-path"
     ;;
-  *"destination="*"-kernel-vmlinux"*)
+  *"firecracker_bin="*"caddy_config_dir="*)
     cat >/dev/null
     printf '%s\n' "/tmp/v-fake-images/web-kernel-vmlinux"
     ;;
