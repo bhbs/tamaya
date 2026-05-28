@@ -533,8 +533,16 @@ impl SshRunner {
             .context("failed to compute remote image sha256")?;
         let stdout = String::from_utf8(output.stdout).context("ssh stdout is not utf-8")?;
         let mut lines = stdout.lines();
-        let hash = lines.next().context("remote sha256 hash not reported")?.trim().to_string();
-        let path = lines.next().context("remote path not reported")?.trim().to_string();
+        let hash = lines
+            .next()
+            .context("remote sha256 hash not reported")?
+            .trim()
+            .to_string();
+        let path = lines
+            .next()
+            .context("remote path not reported")?
+            .trim()
+            .to_string();
         if hash == "missing" || hash.is_empty() {
             Ok((None, path))
         } else {
@@ -544,11 +552,10 @@ impl SshRunner {
 }
 
 fn compute_local_sha256(path: &Path) -> Result<String> {
-    let mut file = File::open(path)
-        .context(format!("failed to open {} for hashing", path.display()))?;
+    let mut file =
+        File::open(path).context(format!("failed to open {} for hashing", path.display()))?;
     let mut hasher = Sha256::new();
-    io::copy(&mut file, &mut hasher)
-        .context(format!("failed to hash {}", path.display()))?;
+    io::copy(&mut file, &mut hasher).context(format!("failed to hash {}", path.display()))?;
     Ok(format!("{:x}", hasher.finalize()))
 }
 
