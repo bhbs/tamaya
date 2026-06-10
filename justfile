@@ -47,6 +47,7 @@ bump semver:
     esac
     NEW_VERSION="$MAJOR.$MINOR.$PATCH"
     sed -i '' "s/^version = \"$CURRENT\"/version = \"$NEW_VERSION\"/" Cargo.toml
+    cargo check
     git add Cargo.toml Cargo.lock
     git commit -m "v${NEW_VERSION}"
     git tag -a "v${NEW_VERSION}" -m "v${NEW_VERSION}"
