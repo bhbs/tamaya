@@ -34,6 +34,25 @@ clippy-fix:
 
 ci-fix: fmt clippy-fix
 
+bump semver:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    CURRENT=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+    IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+    case "{{semver}}" in
+      major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+      minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+      patch) PATCH=$((PATCH + 1)) ;;
+      *) echo "Usage: just bump [patch|minor|major]"; exit 1 ;;
+    esac
+    NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+    sed -i '' "s/^version = \"$CURRENT\"/version = \"$NEW_VERSION\"/" Cargo.toml
+    git add Cargo.toml Cargo.lock
+    git commit -m "v${NEW_VERSION}"
+    git tag -a "v${NEW_VERSION}" -m "v${NEW_VERSION}"
+    git push origin main "v${NEW_VERSION}"
+    echo "✅ Bumped to v${NEW_VERSION}"
+
 # linux-musl cross-build (macOS / Linux): https://github.com/rust-cross/cargo-zigbuild
 linux-musl-target := "x86_64-unknown-linux-musl"
 
