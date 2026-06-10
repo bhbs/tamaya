@@ -1,0 +1,7 @@
+static/
+storage/
+node_modules/
+.env
+.env.local
+*.log
+demo.db*

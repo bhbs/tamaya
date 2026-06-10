@@ -1,0 +1,8 @@
+node_modules/
+.next/
+dist/
+server
+vendor/
+storage/
+*.log
+demo.db*

@@ -1,0 +1,19 @@
+{
+  "name": "demo-bun",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build && next-bun-compile --outfile demo",
+    "build:linux": "next build && next-bun-compile --outfile dist/demo --target bun-linux-x64",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next": "^16.1.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "next-bun-compile": "^0.6.2"
+  }
+}
