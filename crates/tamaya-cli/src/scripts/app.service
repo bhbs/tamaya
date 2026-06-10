@@ -1,0 +1,19 @@
+[Unit]
+Description=Tamaya app {{app}} release {{release}}
+After=network.target
+
+[Service]
+Type=simple
+User=tamaya-{{app}}
+WorkingDirectory={{app_dir}}/releases/{{release}}
+ExecStart={{app_dir}}/releases/{{release}}/app
+Environment=PORT={{port}}
+Environment=HOSTNAME=127.0.0.1
+Environment=TAMAYA_DATA_DIR={{app_dir}}/data
+EnvironmentFile=-/etc/tamaya/apps/{{app}}.env
+Restart=on-failure
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths={{app_dir}}/data

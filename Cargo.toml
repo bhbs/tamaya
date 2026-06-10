@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["crates/tamaya-cli"]
+
+[workspace.package]
+version = "0.0.3"
+edition = "2024"
+rust-version = "1.95.0"
+license = "MIT"
+repository = "https://github.com/bhbs/tamaya"
+homepage = "https://github.com/bhbs/tamaya"
+description = "Self-hosted deployment for single Linux executables over SSH"
+keywords = ["deploy", "ssh", "systemd", "caddy", "devops"]
+categories = ["command-line-utilities"]
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

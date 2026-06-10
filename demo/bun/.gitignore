@@ -1,0 +1,10 @@
+node_modules/
+.next/
+demo
+server
+server-entry.js.map
+vendor/
+.env
+.env.local
+*.log
+demo.db*

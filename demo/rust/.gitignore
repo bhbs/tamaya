@@ -1,0 +1,7 @@
+static/
+storage/
+target/
+.env
+.env.local
+*.log
+demo.db*

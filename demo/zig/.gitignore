@@ -1,0 +1,13 @@
+/static/
+storage/
+zig-out/
+zig-cache/
+.zig-cache/
+sqlite3.c
+sqlite3.h
+static
+*.zip
+.env
+.env.local
+*.log
+demo.db*
