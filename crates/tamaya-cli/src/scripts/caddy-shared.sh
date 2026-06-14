@@ -180,7 +180,7 @@ caddy_write_published_route_snippet() {
   if test "$write_publish_type" = "spa"; then
     write_try_files='    try_files {path} /index.html'
   else
-    write_try_files='    try_files {path} {path}/ /404.html'
+    write_try_files='    try_files {path} {path}.html {path}/ /404.html'
   fi
   if is_root_path "$write_path"; then
     {

@@ -1208,7 +1208,7 @@ site_dir = ""
         assert!(script.contains(
             "caddy_write_published_route_snippet \"$app\" \"$metadata_path\" \"$site_dir\" \"$publish_type\""
         ));
-        assert!(script.contains("try_files {path} {path}/ /404.html"));
+        assert!(script.contains("try_files {path} {path}.html {path}/ /404.html"));
         assert!(script.contains(
             "ls -1dt \"$app_dir\"/releases/* 2>/dev/null | tail -n +6 | xargs -r sudo rm -rf"
         ));
