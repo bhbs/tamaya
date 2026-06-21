@@ -42,6 +42,14 @@ project configuration, and the first deploy.
 See the [documentation](doc/guide/index.md) and
 [configuration reference](doc/reference/tamaya-toml.md) for details.
 
+## AI Agent Support
+
+Tamaya includes an agent skill for generating and reviewing `.tamaya.toml` files.
+Install `skills/tamaya` with any AI agent that supports skill-style project
+instructions.
+
+Then ask your agent to create a `.tamaya.toml` for your project.
+
 ## Development
 
 ```bash

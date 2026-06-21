@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tamaya"
+  short_description: "Create Tamaya deployment configs"
+  default_prompt: "Use $tamaya to create a .tamaya.toml for this project."

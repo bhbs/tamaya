@@ -55,6 +55,10 @@ Set `writable_release = true` only for self-extracting binaries that must write 
 
 Set `verify_binary_deps = true` to run `ldd` on the worker after upload and abort the deploy before systemd starts if shared libraries are missing.
 
+Resource limits are passed through to systemd. `[memory].max` is written as `MemoryMax=` and accepts systemd memory sizes such as `"512M"` or `"1G"`. `[cpu].quota` is written as `CPUQuota=` and accepts percentages such as `"50%"` or `"200%"`.
+
+Omitted resource limits are not added to the generated systemd unit.
+
 ## Published apps
 
 Published apps use `static_root` instead of `binary` and are deployed with `tamaya publish`:
@@ -68,6 +72,8 @@ publish_type = "spa"
 ```
 
 `publish_type` accepts `"static"` or `"spa"`. Static is the default. SPA mode serves `index.html` for missing files so client-side routes work.
+
+See the [configuration reference](../reference/tamaya-toml.md#defaults) for all default values.
 
 ## Domains
 

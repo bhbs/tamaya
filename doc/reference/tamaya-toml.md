@@ -38,6 +38,28 @@ Set `path` to deploy or publish under a URL prefix on the configured domain. Wit
 
 Releases are immutable by default. Set `writable_release = true` only for self-extracting binaries such as Bun Compile artifacts that must write runtime assets beside the executable.
 
+`[memory].max` and `[cpu].quota` are systemd resource-control values. Tamaya writes them to the service unit as `MemoryMax=` and `CPUQuota=`. For example, `max = "512M"` becomes `MemoryMax=512M`, and `quota = "50%"` becomes `CPUQuota=50%`.
+
+## Defaults
+
+| Key | Default when omitted |
+|-----|----------------------|
+| `name` | None; pass the app name on the command line |
+| `worker` | None; pass `--worker` for commands that accept it |
+| `binary` | None; required for `tamaya deploy` unless passed with `--binary` |
+| `static_root` | None; required for `tamaya publish` unless passed with `--static-root` |
+| `domain` | None for `deploy`; required for `publish` |
+| `path` | None; the app owns the domain root when `domain` is set |
+| `publish_type` | `"static"` |
+| `writable_release` | `false` |
+| `verify_binary_deps` | `false` |
+| `[health_check].path` | `"/health"` |
+| `[health_check].retries` | `5` |
+| `[health_check].interval_secs` | `5` |
+| `[health_check].timeout_secs` | `2` |
+| `[memory].max` | None; no `MemoryMax=` is added |
+| `[cpu].quota` | None; no `CPUQuota=` is added |
+
 ## `deploy` or `publish`
 
 Process apps use `binary` and are deployed with `tamaya deploy`. Published apps use `static_root` and `publish_type` and are deployed with `tamaya publish`. The two modes are mutually exclusive: a `.tamaya.toml` must define either `binary` or `static_root`, not both.
