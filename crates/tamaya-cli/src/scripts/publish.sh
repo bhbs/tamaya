@@ -12,13 +12,16 @@ app_dir="$data_dir/apps/$app"
 sudo mkdir -p "$app_dir/releases" "$caddy_dir"
 metadata="$app_dir/metadata.toml"
 acquire_app_operation_lock
-if test -f "$metadata"; then validate_metadata_file "$metadata" "$app"; fi
+old_release=""
+if test -f "$metadata"; then
+  validate_metadata_file "$metadata" "$app"
+  old_release="$md_current"
+fi
 ensure_route_compatible "$app" "published" "$domain" "$path"
 release="$(date -u +%Y%m%d%H%M%S)"
 while test -e "$app_dir/releases/$release"; do release="${release}-1"; done
 staging="$app_dir/releases/.${release}.tmp"
 site_dir="$app_dir/releases/$release/site"
-old_release="${md_current:-}"
 metadata_path="$path"
 if is_root_path "$path"; then metadata_path="/"; fi
 caddy_switched=false

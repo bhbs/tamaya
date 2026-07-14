@@ -1169,6 +1169,11 @@ site_dir = ""
         assert!(
             script.contains("ensure_route_compatible \"$app\" \"process\" \"$domain\" \"$path\"")
         );
+        let capture_previous = script.find("old_unit=\"$md_unit\"").unwrap();
+        let check_routes = script
+            .find("ensure_route_compatible \"$app\" \"process\" \"$domain\" \"$path\"")
+            .unwrap();
+        assert!(capture_previous < check_routes);
         assert!(
             script.contains(
                 "caddy_write_process_route_snippet \"$app\" \"$metadata_path\" \"$port\""
@@ -1202,6 +1207,11 @@ site_dir = ""
         assert!(
             script.contains("ensure_route_compatible \"$app\" \"published\" \"$domain\" \"$path\"")
         );
+        let capture_previous = script.find("old_release=\"$md_current\"").unwrap();
+        let check_routes = script
+            .find("ensure_route_compatible \"$app\" \"published\" \"$domain\" \"$path\"")
+            .unwrap();
+        assert!(capture_previous < check_routes);
         assert!(script.contains("app_type = \"published\""));
         assert!(script.contains("publish_type = \"$publish_type\""));
         assert!(script.contains("site_dir = \"$site_dir\""));
