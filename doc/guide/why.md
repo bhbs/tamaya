@@ -45,7 +45,7 @@ The result is a platform designed for:
 - Per-app Linux users and systemd sandboxing
 - No required Docker workflow
 - SQLite-friendly persistent storage
-- Health-checked blue-green deploys with automatic rollback
+- Health-checked blue-green deploys that retain the previous route when deployment fails, plus explicit rollback
 - High application density on a single server
 
 Build a binary. Deploy a binary.
@@ -53,3 +53,11 @@ Build a binary. Deploy a binary.
 Tamaya is not trying to replace Kubernetes, PaaS platforms, or container-based production systems. It is designed for the simpler case: one developer, one VPS, many small services.
 
 Tamaya is intentionally focused on self-contained applications running on a single Linux VPS. Read [Caveats](./caveats.md) for the current scope and tradeoffs.
+
+## Deeper Reading
+
+The following articles separate the infrastructure model, the Linux primitives, and the behavior Tamaya adds:
+
+- [Why Indie Developers Should Consider a Single VPS](../articles/why-single-vps.md)
+- [How Far Can Linux Go as an Application Platform Without Containers?](../articles/linux-application-platform.md)
+- [How Tamaya Turns a Linux Server into a Deployment Platform](../articles/how-tamaya-uses-linux.md)

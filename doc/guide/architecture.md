@@ -15,11 +15,10 @@ Each process app receives a dedicated `tamaya-<app>` Linux user. Both process an
 ├── current
 ├── previous
 ├── data/
-├── metadata.toml
-└── deploy.lock
+└── metadata.toml
 ```
 
-Deploys use an app lock and a worker-wide port allocation lock. Failed releases are stopped and removed before traffic changes.
+Per-application operation locks live under `/var/lib/tamaya/app-locks/`, and the worker-wide port allocation lock is `/var/lib/tamaya/ports.lock`. Failed releases are stopped and removed before traffic changes.
 
 ## Linux User Lifecycle
 
@@ -81,6 +80,8 @@ ReadWritePaths=/var/lib/tamaya/apps/<app>/data
 ```
 
 The systemd unit sets the process working directory to the active **release** directory (the same tree as `ExecStart`). After a successful deploy, `current/` is a symlink to that release for operators and metadata; systemd does not depend on it at start time. The persistent data path is available as the `TAMAYA_DATA_DIR` environment variable. The allocated localhost port is available as `PORT`, and worker-stored environment variables are loaded from `/etc/tamaya/apps/<app>.env`.
+
+The environment file is loaded after the generated `PORT`, `HOSTNAME`, and `TAMAYA_DATA_DIR` settings, so duplicate keys override them. Treat those names as reserved when using `tamaya env`; the CLI does not currently reject them.
 
 Outside `data/`, the service is constrained by the systemd sandbox: host paths are read-only, hidden, or isolated except where systemd provides private runtime locations such as `/tmp`.
 

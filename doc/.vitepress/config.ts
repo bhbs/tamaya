@@ -13,6 +13,7 @@ export default defineConfig({
 
     nav: [
       { text: "Guide", link: "/guide/" },
+      { text: "Articles", link: "/articles/" },
       { text: "Reference", link: "/reference/" },
     ],
 
@@ -53,6 +54,17 @@ export default defineConfig({
             { text: "CLI Commands", link: "/reference/" },
             { text: "Configuration", link: "/reference/tamaya-toml" },
             { text: "Directory Layout", link: "/reference/directory-structure" },
+          ],
+        },
+      ],
+      "/articles/": [
+        {
+          text: "Articles",
+          items: [
+            { text: "Overview", link: "/articles/" },
+            { text: "Why Indie Developers Should Consider a Single VPS", link: "/articles/why-single-vps" },
+            { text: "How Far Can Linux Go as an Application Platform Without Containers?", link: "/articles/linux-application-platform" },
+            { text: "How Tamaya Turns a Linux Server into a Deployment Platform", link: "/articles/how-tamaya-uses-linux" },
           ],
         },
       ],

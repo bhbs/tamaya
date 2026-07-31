@@ -33,7 +33,9 @@ tamaya env list
 tamaya env unset DATABASE_URL
 ```
 
-Setting or unsetting a value does not change an already-running application process. Deploy a new release for the updated environment to take effect.
+Setting or unsetting a value does not change an already-running application process. The supported Tamaya CLI path is to deploy a new release. systemd reads the environment file whenever it starts a release unit, so updated values also apply on any later unit restart.
+
+Treat `PORT`, `HOSTNAME`, and `TAMAYA_DATA_DIR` as reserved names. Tamaya does not currently reject these keys, and the environment file is loaded after the generated values in the systemd unit, so setting a duplicate key overrides Tamaya's value.
 
 ## Storage
 

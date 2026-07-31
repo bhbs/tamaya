@@ -16,12 +16,13 @@ Project-local settings live in `.tamaya.toml`, discovered upward from the curren
 ├── current
 ├── previous
 ├── data/                 # persistent app data; also the tamaya-<app> user's $HOME
-├── metadata.toml
-└── deploy.lock
+└── metadata.toml
 
 /etc/tamaya/apps/<app>.env
 /etc/systemd/system/tamaya-<app>-<release>.service
 /etc/caddy/conf.d/<app>.caddy
+/var/lib/tamaya/app-locks/<app>.lock
+/var/lib/tamaya/ports.lock
 ```
 
 ## Worker — Published App
@@ -31,10 +32,10 @@ Project-local settings live in `.tamaya.toml`, discovered upward from the curren
 ├── releases/<release>/site/
 ├── current
 ├── previous
-├── metadata.toml
-└── deploy.lock
+└── metadata.toml
 
 /etc/caddy/conf.d/<app>.caddy
+/var/lib/tamaya/app-locks/<app>.lock
 ```
 
 Published site files are owned by `root:root`. Published apps have no systemd unit or environment file.
