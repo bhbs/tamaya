@@ -1,6 +1,6 @@
 # Architecture
 
-The local `tamaya` CLI sends shell programs and binary streams to a Linux worker over SSH. Worker-side metadata is the source of truth, so multiple controller machines observe the same deployment state.
+The local `tamaya` CLI sends shell programs and binary streams to a Linux worker over SSH. Worker programs run in a root shell via noninteractive sudo; application services run as their dedicated unprivileged users. Worker-side metadata is the source of truth, so multiple controller machines observe the same deployment state.
 
 ```text
 local CLI -> SSH -> worker metadata, systemd, Caddy

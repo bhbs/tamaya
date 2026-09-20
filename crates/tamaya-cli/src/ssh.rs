@@ -19,6 +19,7 @@ pub struct SshRunner {
 pub struct CheckResult {
     pub success: bool,
     pub output: String,
+    pub stderr: String,
 }
 
 #[derive(Debug, Clone)]
@@ -57,7 +58,9 @@ impl SshRunner {
     fn shell_command(&self, script: &str) -> Command {
         let mut command =
             Command::new(std::env::var_os("TAMAYA_SSH_BIN").unwrap_or_else(|| "ssh".into()));
-        command.args(self.command_args(&format!("sh -lc {}", shell_quote(script))));
+        // The shell itself needs root access for redirections, locks, and private
+        // metadata reads. Never let sudo consume the upload stream as a password.
+        command.args(self.command_args(&format!("sudo -n sh -lc {}", shell_quote(script))));
         command
     }
 
@@ -129,6 +132,7 @@ impl SshRunner {
         Ok(CheckResult {
             success: output.status.success(),
             output: stdout,
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         })
     }
 
@@ -1543,6 +1547,35 @@ site_dir = ""
     #[test]
     fn quoting_handles_shell_special_characters() {
         assert_eq!(shell_quote("it's"), "'it'\"'\"'s'");
+    }
+
+    #[test]
+    fn worker_shell_preserves_uploaded_bytes_and_exit_status() {
+        let command = SshRunner::new(worker())
+            .shell_command("cat; printf '%s\\n' \"worker's stderr\" >&2; exit 23");
+        let remote = command.get_args().nth(1).unwrap().to_str().unwrap();
+        let shell = format!(
+            r#"sudo() {{
+  test "$1" = -n || exit 99
+  shift
+  printf 'noninteractive sudo\n' >&2
+  "$@"
+}}
+{remote}"#
+        );
+        let payload = b"\x00binary\xff\n'\"\\$EOF\n";
+        let mut child = Command::new("sh")
+            .args(["-c", &shell])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(payload).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert_eq!(output.status.code(), Some(23));
+        assert_eq!(output.stdout, payload);
+        assert_eq!(output.stderr, b"noninteractive sudo\nworker's stderr\n");
     }
 
     #[test]

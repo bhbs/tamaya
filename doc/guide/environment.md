@@ -57,6 +57,8 @@ Worker-side encryption is intentionally deferred. Encryption with a key stored o
 
 ## Worker Privileges
 
-Tamaya connects over SSH as a deployment user, such as `deploy`. That user must have root access or passwordless sudo access for Tamaya's privileged worker operations: creating application users, installing systemd units and environment files, controlling services, and updating Caddy configuration.
+Tamaya connects over SSH as a deployment user, such as `deploy`. Worker operations run in a root shell through `sudo -n sh -lc`. The SSH user must be allowed to run that shell without a password; sudo must also be installed when connecting as root. This keeps metadata reads, lock creation, application-user management, systemd operations, and Caddy updates under the same privileges. Metadata stays owned by root with mode `0600`.
+
+The `-n` option makes sudo fail immediately if it requires a password. Standard input remains available for application binaries, published files, and environment values.
 
 Applications do not receive sudo access. Disable direct root SSH login and SSH password login where practical. Treat compromise of the deployment user's SSH key as host-level compromise because Tamaya uses that account to perform privileged operations.

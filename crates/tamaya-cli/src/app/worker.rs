@@ -18,6 +18,7 @@ pub fn check(worker: Option<String>) -> Result<()> {
     let result = ssh.check()?;
     crate::log::result_ready();
     print!("{}", result.output);
+    eprint!("{}", result.stderr);
     println!("worker: {name}");
     if !result.success {
         anyhow::bail!("worker {name} is not ready");

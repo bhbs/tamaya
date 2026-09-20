@@ -20,3 +20,5 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - run: just ci
+      - name: Verify non-root worker permissions with real sudo
+        run: cargo test --test worker_permissions -- --ignored

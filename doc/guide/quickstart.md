@@ -9,6 +9,11 @@ Host tamaya-prod
   IdentityFile ~/.ssh/id_ed25519
 ```
 
+The SSH user must be allowed to run a root shell with passwordless sudo.
+Tamaya runs worker operations through `sudo -n sh -lc`, which fails immediately
+if sudo requires a password. Application services still run as their dedicated
+unprivileged users.
+
 Run setup once, then verify the worker:
 
 ```bash

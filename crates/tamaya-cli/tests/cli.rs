@@ -606,6 +606,39 @@ fn ssh_failures_are_reported() {
 }
 
 #[test]
+fn sudo_denial_is_reported_for_worker_operations() {
+    let home = initialized("sudo-denied");
+    add_worker(&home);
+    let ssh = failing_ssh(&home);
+    fs::write(
+        &ssh,
+        "#!/bin/sh\nprintf 'sudo: a password is required\\n' >&2\nexit 1\n",
+    )
+    .unwrap();
+    let binary = home.join("web");
+    fs::write(&binary, "binary").unwrap();
+
+    for args in [
+        vec!["setup"],
+        vec!["check"],
+        vec!["status", "web"],
+        vec!["logs", "web"],
+        vec!["deploy", "web", "--binary", binary.to_str().unwrap()],
+    ] {
+        let output = tamaya(&home)
+            .env("TAMAYA_SSH_BIN", &ssh)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("sudo: a password is required"),
+            "{output:?}"
+        );
+    }
+}
+
+#[test]
 fn deploy_rejects_bad_domain() {
     let home = initialized("deploy-bad-domain");
     add_worker(&home);
