@@ -23,7 +23,19 @@ tamaya env blog unset DATABASE_URL
 
 `env list` prints key names only. Tamaya does not print stored values during normal CLI operations.
 
-Setting an existing key replaces its previous value. Values are stored as single-line `KEY=value` entries; newlines are rejected.
+Setting an existing key replaces its previous value. Key names must start with an
+ASCII letter or `_` and contain only ASCII letters, digits, or `_`, as required by
+systemd. `env unset` can still remove names accepted by older Tamaya versions,
+such as `API-KEY`.
+
+Values are stored as quoted, escaped, single-line `KEY="value"` entries in
+systemd's EnvironmentFile format. Quotes, backslashes, `$`, backticks, tabs,
+leading/trailing spaces, and UTF-8 text retain their literal values. Newlines,
+NUL, Unicode byte order marks, and Unicode noncharacters are rejected.
+
+Existing entries remain unchanged until you set or unset their keys. If an older
+Tamaya version stored a value containing quotes, backslashes, or surrounding
+spaces, set that key again to preserve the intended value with the new encoding.
 
 When `.tamaya.toml` defines `name`, omit the app argument:
 
@@ -45,7 +57,13 @@ The local controller does not persist environment values. Each `env set` command
 /etc/tamaya/apps/<app>.env
 ```
 
-Worker-side files are owned by `root:root` with mode `0600`. systemd reads the file while starting the service and injects the values into the application process. Each application runs as its own unprivileged `tamaya-<app>` user. It receives its own values but cannot open another application's environment file.
+Worker-side files are owned by `root:root` with mode `0600`, including temporary
+replacement files. Environment operations share the app lifecycle lock, so
+concurrent updates cannot overwrite each other's changes or race with deletion.
+The updated file is atomically renamed into place; a failed update leaves the
+previous file intact.
+
+systemd reads the file while starting the service and injects the values into the application process. Each application runs as its own unprivileged `tamaya-<app>` user. It receives its own values but cannot open another application's environment file.
 
 Environment changes apply when a systemd release unit starts.
 

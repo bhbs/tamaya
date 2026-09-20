@@ -23,7 +23,9 @@ pub fn set(app: Option<&str>, key: &str, stdin: bool) -> Result<()> {
 pub fn unset(app: Option<&str>, key: &str) -> Result<()> {
     let (app, ssh) = context(app)?;
     validate_name("app", &app)?;
-    validate_key(key)?;
+    // Older versions accepted names that systemd ignores. Keep those names
+    // removable while requiring valid systemd names for newly set values.
+    validate_name("environment variable key", key)?;
 
     crate::log::step(format!("updating environment variables for {app}"));
     ssh.unset_env(&app, key)?;
@@ -54,16 +56,15 @@ fn context(app: Option<&str>) -> Result<(String, SshRunner)> {
     Ok((app, SshRunner::new(worker)))
 }
 
-fn validate_key(key: &str) -> Result<()> {
+pub(crate) fn validate_key(key: &str) -> Result<()> {
     if key.is_empty() {
         bail!("environment variable key must not be empty");
     }
-    if !key
-        .bytes()
-        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    if !key.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
     {
         bail!(
-            "environment variable key must contain only ASCII letters, digits, '-' or '_': {key:?}"
+            "environment variable key must start with an ASCII letter or '_' and contain only ASCII letters, digits or '_': {key:?}"
         );
     }
     Ok(())
@@ -73,7 +74,31 @@ fn validate_value(value: &str) -> Result<()> {
     if value.contains(['\n', '\r']) {
         bail!("environment variable value must not contain newlines");
     }
+    if value.chars().any(|c| {
+        let code = c as u32;
+        c == '\0' || c == '\u{feff}' || (0xfdd0..=0xfdef).contains(&code) || code & 0xffff >= 0xfffe
+    }) {
+        bail!("environment variable value contains a character unsupported by systemd");
+    }
     Ok(())
+}
+
+pub(crate) fn encode_value(value: &[u8]) -> Result<String> {
+    let value =
+        std::str::from_utf8(value).context("environment variable value must be valid UTF-8")?;
+    validate_value(value)?;
+    // EnvironmentFile uses shell-like double quotes, not shell evaluation.
+    // Match systemd's escaping so whitespace and literal backslashes survive.
+    let mut encoded = String::with_capacity(value.len() + 2);
+    encoded.push('"');
+    for c in value.chars() {
+        if matches!(c, '\\' | '"' | '$' | '`') {
+            encoded.push('\\');
+        }
+        encoded.push(c);
+    }
+    encoded.push('"');
+    Ok(encoded)
 }
 
 fn read_value(key: &str, stdin: bool) -> Result<String> {
@@ -101,7 +126,9 @@ mod tests {
     #[test]
     fn validates_keys() {
         assert!(validate_key("DATABASE_URL").is_ok());
-        assert!(validate_key("API-KEY2").is_ok());
+        assert!(validate_key("_API_KEY2").is_ok());
+        assert!(validate_key("API-KEY2").is_err());
+        assert!(validate_key("2TOKEN").is_err());
         assert!(validate_key("").is_err());
         assert!(validate_key("BAD KEY").is_err());
         assert!(validate_key("BAD=value").is_err());
@@ -112,5 +139,36 @@ mod tests {
         assert!(validate_value("one line").is_ok());
         assert!(validate_value("line one\nline two").is_err());
         assert!(validate_value("line one\rline two").is_err());
+    }
+
+    #[test]
+    fn rejects_values_systemd_cannot_load() {
+        for value in [
+            "nul\0byte",
+            "\u{feff}",
+            "\u{fdd0}",
+            "\u{fdef}",
+            "\u{fffe}",
+            "\u{10ffff}",
+        ] {
+            assert!(encode_value(value.as_bytes()).is_err());
+        }
+        assert!(encode_value(&[0xff]).is_err());
+        assert!(encode_value("\t日本語🙂\u{fdf0}".as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn encodes_environment_file_values_without_changing_literals() {
+        for (value, expected) in [
+            ("", "\"\""),
+            ("  padded\t ", "\"  padded\t \""),
+            ("a'b#;=日本語🙂", "\"a'b#;=日本語🙂\""),
+            (
+                r#""quoted" $HOME `cmd` \n C:\path\"#,
+                r#""\"quoted\" \$HOME \`cmd\` \\n C:\\path\\""#,
+            ),
+        ] {
+            assert_eq!(encode_value(value.as_bytes()).unwrap(), expected);
+        }
     }
 }

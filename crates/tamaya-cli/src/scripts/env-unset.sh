@@ -4,6 +4,7 @@ progress "removing environment variable"
 app={{app}}
 key={{key}}
 data_dir={{data}}
+acquire_app_operation_lock
 metadata="$data_dir/apps/$app/metadata.toml"
 if test -f "$metadata"; then
   validate_metadata_file "$metadata" "$app"
@@ -11,14 +12,15 @@ if test -f "$metadata"; then
   test "$app_type" != "published" || { echo "$app is a published app and does not support environment variables" >&2; exit 1; }
 fi
 dest="/etc/tamaya/apps/$app.env"
+sudo test -f "$dest" || { echo "no environment variables set for $app" >&2; exit 1; }
 umask 077
-tmp="$(mktemp)"
+tmp="$(mktemp "/etc/tamaya/apps/.$app.env.tmp.XXXXXX")"
 trap 'rm -f "$tmp"' EXIT
 trap 'exit 1' HUP INT TERM
-sudo test -f "$dest" || { echo "no environment variables set for $app" >&2; exit 1; }
-sudo cat "$dest" | awk -v key="$key" 'index($0, key "=") == 1 { found=1 } END { exit !found }' ||
+sudo awk -v key="$key" 'index($0, key "=") == 1 { found=1 } END { exit !found }' "$dest" ||
   { echo "key $key not found for $app" >&2; exit 1; }
-sudo cat "$dest" | awk -v key="$key" 'index($0, key "=") != 1' > "$tmp"
-sudo install -o root -g root -m 0600 "$tmp" "$dest.tmp"
-sudo mv "$dest.tmp" "$dest"
+sudo awk -v key="$key" 'index($0, key "=") != 1' "$dest" > "$tmp"
+sudo chown root:root "$tmp"
+sudo chmod 0600 "$tmp"
+sudo mv "$tmp" "$dest"
 progress "environment variable removed"

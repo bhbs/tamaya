@@ -3,6 +3,7 @@ set -eu
 progress "loading environment variables"
 app={{app}}
 data_dir={{data}}
+acquire_app_operation_lock
 metadata="$data_dir/apps/$app/metadata.toml"
 if test -f "$metadata"; then
   validate_metadata_file "$metadata" "$app"
@@ -11,5 +12,5 @@ if test -f "$metadata"; then
 fi
 dest="/etc/tamaya/apps/$app.env"
 if sudo test -f "$dest"; then
-  sudo cat "$dest" | awk -F= 'NF { print $1 }'
+  sudo awk -F= 'NF { print $1 }' "$dest"
 fi

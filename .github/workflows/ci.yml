@@ -22,3 +22,5 @@ jobs:
       - run: just ci
       - name: Verify non-root worker permissions with real sudo
         run: cargo test --test worker_permissions -- --ignored
+      - name: Verify environment values with real systemd
+        run: cargo test --test env_systemd -- --ignored

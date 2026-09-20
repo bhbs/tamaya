@@ -139,10 +139,11 @@ impl SshRunner {
     pub fn set_env(&self, app: &str, key: &str, value: &[u8]) -> Result<()> {
         validate_worker(&self.worker)?;
         validate_name("app", app)?;
-        validate_name("environment variable key", key)?;
+        crate::env::validate_key(key)?;
+        let encoded = crate::env::encode_value(value)?;
         self.pipe_bytes(
             &set_env_script(&self.worker, app, key),
-            value,
+            encoded.as_bytes(),
             "environment variable",
         )
     }

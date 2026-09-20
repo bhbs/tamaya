@@ -4,6 +4,7 @@ progress "installing environment variable"
 app={{app}}
 key={{key}}
 data_dir={{data}}
+acquire_app_operation_lock
 metadata="$data_dir/apps/$app/metadata.toml"
 if test -f "$metadata"; then
   validate_metadata_file "$metadata" "$app"
@@ -12,16 +13,19 @@ if test -f "$metadata"; then
 fi
 dest="/etc/tamaya/apps/$app.env"
 umask 077
-tmp="$(mktemp)"
+sudo mkdir -p /etc/tamaya/apps
+tmp="$(mktemp "/etc/tamaya/apps/.$app.env.tmp.XXXXXX")"
 trap 'rm -f "$tmp"' EXIT
 trap 'exit 1' HUP INT TERM
-if sudo test -f "$dest"; then
-  sudo cat "$dest" | awk -v key="$key" 'index($0, key "=") != 1' > "$tmp"
-fi
-printf '%s=' "$key" >> "$tmp"
+# The controller supplies one quoted, escaped EnvironmentFile value on stdin.
+# Put it before legacy rows, which may end in an unescaped continuation.
+printf '%s=' "$key" > "$tmp"
 cat >> "$tmp"
 printf '\n' >> "$tmp"
-sudo mkdir -p /etc/tamaya/apps
-sudo install -o root -g root -m 0600 "$tmp" "$dest.tmp"
-sudo mv "$dest.tmp" "$dest"
+if sudo test -f "$dest"; then
+  sudo awk -v key="$key" 'index($0, key "=") != 1' "$dest" >> "$tmp"
+fi
+sudo chown root:root "$tmp"
+sudo chmod 0600 "$tmp"
+sudo mv "$tmp" "$dest"
 progress "environment variable installed"
