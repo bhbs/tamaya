@@ -14,6 +14,7 @@ value() { metadata_string "$metadata" "$1"; }
 deleting_app=true
 progress "removing Caddy route"
 {{remove}}
+remove_caddy_commit
 progress "removing release services"
 disable_release_units remove
 sudo systemctl daemon-reload

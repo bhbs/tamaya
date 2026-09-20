@@ -94,9 +94,9 @@ caddy_restore_domain_file() {
   restore_bak="$2"
   restore_had_previous="$3"
   if test "$restore_had_previous" = true; then
-    sudo mv "$restore_bak" "$restore_out"
+    sudo mv "$restore_bak" "$restore_out" || return 1
   else
-    sudo rm -f "$restore_out" "$restore_bak"
+    sudo rm -f "$restore_out" "$restore_bak" || return 1
   fi
   sudo systemctl reload caddy >/dev/null 2>&1 || true
 }
@@ -113,7 +113,7 @@ caddy_validate_and_reload_domain() {
     caddy_restore_domain_file "$validate_out" "$validate_bak" "$validate_had_previous"
     return 1
   fi
-  sudo rm -f "$validate_bak"
+  sudo rm -f "$validate_bak" || return 1
 }
 
 caddy_replace_domain_file() {
@@ -121,14 +121,14 @@ caddy_replace_domain_file() {
   replace_tmp="$2"
   replace_bak="$replace_out.bak"
   replace_had_previous=false
-  sudo rm -f "$replace_bak"
+  sudo rm -f "$replace_bak" || return 1
   if sudo test -f "$replace_out"; then
-    sudo cp "$replace_out" "$replace_bak"
+    sudo cp "$replace_out" "$replace_bak" || return 1
     replace_had_previous=true
   fi
-  sudo chown root:root "$replace_tmp"
-  sudo chmod 0644 "$replace_tmp"
-  sudo mv "$replace_tmp" "$replace_out"
+  sudo chown root:root "$replace_tmp" || return 1
+  sudo chmod 0644 "$replace_tmp" || return 1
+  sudo mv "$replace_tmp" "$replace_out" || return 1
   caddy_validate_and_reload_domain "$replace_out" "$replace_bak" "$replace_had_previous"
 }
 
@@ -136,12 +136,12 @@ caddy_remove_domain_file() {
   remove_out="$1"
   remove_bak="$remove_out.bak"
   remove_had_previous=false
-  sudo rm -f "$remove_bak"
+  sudo rm -f "$remove_bak" || return 1
   if sudo test -f "$remove_out"; then
-    sudo cp "$remove_out" "$remove_bak"
+    sudo cp "$remove_out" "$remove_bak" || return 1
     remove_had_previous=true
   fi
-  sudo rm -f "$remove_out"
+  sudo rm -f "$remove_out" || return 1
   caddy_validate_and_reload_domain "$remove_out" "$remove_bak" "$remove_had_previous"
 }
 
@@ -217,19 +217,26 @@ caddy_remove_stale_standalone_files_for_domain() {
   for remove_metadata in "$data_dir"/apps/*/metadata.toml; do
     test -f "$remove_metadata" || continue
     remove_expected_app="$(basename "$(dirname "$remove_metadata")")"
-    validate_metadata_file "$remove_metadata" "$remove_expected_app"
+    validate_metadata_file "$remove_metadata" "$remove_expected_app" || return 1
     remove_app="$(caddy_metadata_value "$remove_metadata" app)"
     remove_route_domain="$(caddy_metadata_value "$remove_metadata" domain)"
     test "$remove_route_domain" = "$remove_domain" || continue
     test -n "$remove_app" || remove_app="$(basename "$(dirname "$remove_metadata")")"
-    sudo rm -f "$caddy_dir/$remove_app.caddy" "$caddy_dir/$remove_app.caddy.tmp" "$caddy_dir/$remove_app.caddy.bak"
+    test "$caddy_dir/$remove_app.caddy" != "$remove_merged" || continue
+    # An active legacy app without a canonical snippet has not migrated yet.
+    # Its standalone file may still be its only working public route.
+    if test ! -f "$route_dir/$remove_app.caddy" && test "$md_status" != "stopped"; then
+      continue
+    fi
+    sudo rm -f "$caddy_dir/$remove_app.caddy" || return 1
   done
   for stale_file in "$caddy_dir"/*.caddy; do
     test -f "$stale_file" || continue
     test "$stale_file" = "$remove_merged" && continue
     stale_header="$(caddy_site_block_header "$stale_file")"
     test "$stale_header" = "$remove_domain" || continue
-    sudo rm -f "$stale_file" "$stale_file.tmp" "$stale_file.bak"
+    test -f "$route_dir/$(basename "$stale_file")" || continue
+    sudo rm -f "$stale_file" || return 1
   done
 }
 
@@ -241,32 +248,68 @@ rebuild_domain() (
   rebuild_tmp="$rebuild_target.tmp"
   rebuild_maintenance="$domain_dir/$rebuild_key.maintenance"
   umask 077
-  rebuild_path_list="$(mktemp)"
+  rebuild_path_list="$(mktemp)" || exit 1
   trap 'rm -f "$rebuild_path_list"' EXIT
   trap 'exit 1' HUP INT TERM
   rebuild_root_app=""
   rebuild_root_count=0
-  sudo touch "$lock_dir/caddy.lock"
-  sudo chown "$(id -u):$(id -g)" "$lock_dir/caddy.lock"
-  sudo chmod 0600 "$lock_dir/caddy.lock"
+  sudo touch "$lock_dir/caddy.lock" || exit 1
+  sudo chown "$(id -u):$(id -g)" "$lock_dir/caddy.lock" || exit 1
+  sudo chmod 0600 "$lock_dir/caddy.lock" || exit 1
 
   (
-    flock 7
+    flock 7 || exit 1
 
-    caddy_remove_stale_standalone_files_for_domain "$rebuild_domain_value"
+    # Legacy site files are removed during migration too. Keep the complete
+    # imported configuration until validation and reload succeed, under the
+    # same worker-wide lock used for every domain update.
+    rebuild_backup="$(mktemp -d)" || exit 1
+    rebuild_changed=false
+    rebuild_cleanup() {
+      rebuild_status=$?
+      trap - EXIT
+      if test "$rebuild_status" != 0 && test "$rebuild_changed" = true; then
+        rebuild_restore_failed=false
+        if test ! -f "$rebuild_backup/$(basename "$rebuild_target")"; then
+          sudo rm -f "$rebuild_target" || rebuild_restore_failed=true
+        fi
+        for rebuild_saved in "$rebuild_backup"/*.caddy; do
+          test -f "$rebuild_saved" || continue
+          sudo cp -p "$rebuild_saved" "$caddy_dir/$(basename "$rebuild_saved")" || rebuild_restore_failed=true
+        done
+        if test "$rebuild_restore_failed" = false; then
+          sudo systemctl reload caddy >/dev/null 2>&1 || rebuild_restore_failed=true
+        fi
+        if test "$rebuild_restore_failed" = true; then
+          echo "failed to restore Caddy configuration; backup retained at $rebuild_backup" >&2
+          exit "$rebuild_status"
+        fi
+      fi
+      sudo rm -f "$rebuild_tmp" || true
+      sudo rm -rf "$rebuild_backup" || true
+      exit "$rebuild_status"
+    }
+    trap rebuild_cleanup EXIT
+    trap 'exit 1' HUP INT TERM
+    for rebuild_existing in "$caddy_dir"/*.caddy; do
+      test -f "$rebuild_existing" || continue
+      sudo cp -p "$rebuild_existing" "$rebuild_backup/" || exit 1
+    done
+    rebuild_changed=true
+    caddy_remove_stale_standalone_files_for_domain "$rebuild_domain_value" || exit 1
 
     if sudo test -f "$rebuild_maintenance"; then
       rebuild_static="$data_dir/static/maintenance/$rebuild_key"
-      sudo mkdir -p "$rebuild_static"
-      rebuild_message="$(sudo cat "$rebuild_maintenance")"
-      printf '%s\n' "$rebuild_message" | sudo sed "s#__DOMAIN__#$rebuild_domain_value#g" | sudo tee "$rebuild_static/index.html" >/dev/null
+      sudo mkdir -p "$rebuild_static" || exit 1
+      rebuild_message="$(sudo cat "$rebuild_maintenance")" || exit 1
+      printf '%s\n' "$rebuild_message" | sudo sed "s#__DOMAIN__#$rebuild_domain_value#g" | sudo tee "$rebuild_static/index.html" >/dev/null || exit 1
       {
         printf '%s {\n' "$rebuild_domain_value"
         printf '    root * %s\n' "$rebuild_static"
         printf '    file_server\n'
         printf '}\n'
-      } | sudo tee "$rebuild_tmp" >/dev/null
-      caddy_replace_domain_file "$rebuild_target" "$rebuild_tmp"
+      } | sudo tee "$rebuild_tmp" >/dev/null || exit 1
+      caddy_replace_domain_file "$rebuild_target" "$rebuild_tmp" || exit 1
       rm -f "$rebuild_path_list"
       exit 0
     fi
@@ -274,7 +317,7 @@ rebuild_domain() (
     for rebuild_metadata in "$data_dir"/apps/*/metadata.toml; do
       test -f "$rebuild_metadata" || continue
       rebuild_expected_app="$(basename "$(dirname "$rebuild_metadata")")"
-      validate_metadata_file "$rebuild_metadata" "$rebuild_expected_app"
+      validate_metadata_file "$rebuild_metadata" "$rebuild_expected_app" || exit 1
       rebuild_app="$(caddy_metadata_value "$rebuild_metadata" app)"
       rebuild_route_domain="$(caddy_metadata_value "$rebuild_metadata" domain)"
       rebuild_path="$(caddy_metadata_value "$rebuild_metadata" path)"
@@ -313,7 +356,7 @@ rebuild_domain() (
     fi
 
     if test "$rebuild_root_count" = 0 && test ! -s "$rebuild_path_list"; then
-      caddy_remove_domain_file "$rebuild_target"
+      caddy_remove_domain_file "$rebuild_target" || exit 1
       rm -f "$rebuild_path_list"
       exit 0
     fi
@@ -329,8 +372,8 @@ rebuild_domain() (
         sed 's/^/    /' "$route_dir/$rebuild_root_app.caddy"
       fi
       printf '}\n'
-    } | sudo tee "$rebuild_tmp" >/dev/null
-    caddy_replace_domain_file "$rebuild_target" "$rebuild_tmp"
+    } | sudo tee "$rebuild_tmp" >/dev/null || exit 1
+    caddy_replace_domain_file "$rebuild_target" "$rebuild_tmp" || exit 1
     rm -f "$rebuild_path_list"
   ) 7>"$lock_dir/caddy.lock"
 )
@@ -437,4 +480,36 @@ caddy_print_domain_routes() (
 
 caddy_print_merged_domain_file() {
   caddy_print_domain_routes "$1"
+}
+
+# Callers own the transaction and restore metadata/routes before rebuilding.
+# Keep the rendered page too: a failed maintenance update must retain its old
+# content even when the previous Caddy configuration is still serving it.
+caddy_backup_maintenance_state() {
+  test -n "$1" || return 1
+  maintenance_state_key="$(domain_key "$1")"
+  maintenance_state_backup="$(mktemp -d)" || return 1
+  if sudo test -f "$domain_dir/$maintenance_state_key.maintenance"; then
+    sudo cp -p "$domain_dir/$maintenance_state_key.maintenance" "$maintenance_state_backup/marker" || return 1
+  fi
+  if sudo test -d "$data_dir/static/maintenance/$maintenance_state_key"; then
+    sudo cp -Rp "$data_dir/static/maintenance/$maintenance_state_key" "$maintenance_state_backup/page" || return 1
+  fi
+}
+
+caddy_restore_maintenance_state() {
+  if sudo test -f "$maintenance_state_backup/marker"; then
+    sudo cp -p "$maintenance_state_backup/marker" "$domain_dir/$maintenance_state_key.maintenance" || return 1
+  else
+    sudo rm -f "$domain_dir/$maintenance_state_key.maintenance" || return 1
+  fi
+  sudo rm -rf "$data_dir/static/maintenance/$maintenance_state_key" || return 1
+  if sudo test -d "$maintenance_state_backup/page"; then
+    sudo mkdir -p "$data_dir/static/maintenance" || return 1
+    sudo cp -Rp "$maintenance_state_backup/page" "$data_dir/static/maintenance/$maintenance_state_key" || return 1
+  fi
+}
+
+caddy_discard_maintenance_backup() {
+  test -z "${maintenance_state_backup:-}" || sudo rm -rf "$maintenance_state_backup"
 }

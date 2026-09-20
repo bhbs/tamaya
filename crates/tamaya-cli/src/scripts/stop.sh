@@ -1,8 +1,6 @@
 {{prelude}}
 progress "removing Caddy route"
 {{remove}}
-progress "stopping release services"
-disable_release_units
 validate_metadata_file "$metadata" "$app"
 atomic_write_metadata <<EOF
 app = "$md_app"
@@ -22,4 +20,7 @@ health_interval = $md_health_interval
 publish_type = "$md_publish_type"
 site_dir = "$md_site_dir"
 EOF
+remove_caddy_commit
+progress "stopping release services"
+disable_release_units
 printf 'stopped %s\n' "$app"

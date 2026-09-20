@@ -4,7 +4,8 @@ Thank you for your interest in contributing to Tamaya!
 
 ## Development Setup
 
-Requires Rust 1.95 or newer and [just](https://github.com/casey/just).
+Requires Rust 1.95 or newer, [just](https://github.com/casey/just), and Python 3
+for the worker-script integration test fixtures.
 
 ```bash
 git clone https://github.com/bhbs/tamaya.git
