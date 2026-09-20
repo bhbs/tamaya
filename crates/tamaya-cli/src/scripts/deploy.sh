@@ -19,7 +19,14 @@ if test -f "$metadata"; then
   validate_metadata_file "$metadata" "$app"
   old_unit="$md_unit"
   old_release="$md_current"
+  if test -z "$domain"; then domain="$md_domain"; fi
+  if test -z "$path"; then path="$md_path"; fi
 fi
+# Resolve the effective route before checking other apps, whose metadata
+# validation overwrites md_*. The controller cannot resolve inherited routes.
+if test -n "$domain" && is_root_path "$path"; then path="/"; fi
+route_kind="$(route_kind_from_metadata "$domain" "$path")"
+metadata_path="$path"
 ensure_route_compatible "$app" "process" "$domain" "$path"
 exec 8>"$data_dir/ports.lock"
 flock 8
@@ -128,11 +135,6 @@ for _ in $(seq 1 {{retries}}); do
   sleep {{interval}}
 done
 test "$ok" = true || { report_health_check_failure "$unit" "127.0.0.1:$port$health"; exit 1; }
-if test -z "$domain"; then domain="${md_domain:-}"; fi
-if test -z "$path"; then path="${md_path:-}"; fi
-if test -z "$route_kind"; then route_kind="$(route_kind_from_metadata "$domain" "$path")"; fi
-metadata_path="$path"
-if test -n "$domain" && is_root_path "$path"; then metadata_path="/"; fi
 progress "recording release metadata"
 sudo rm -f "$app_dir/metadata.toml.bak"
 if test -f "$metadata"; then

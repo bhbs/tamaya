@@ -72,12 +72,17 @@ pub fn deploy(options: DeployOptions) -> Result<()> {
         crate::log::result_ready();
         println!("deploy {app} to {worker_name}");
         println!("binary: {}", binary.display());
-        println!("domain: {}", domain.as_deref().unwrap_or("(none)"));
-        println!(
-            "route: {} path: {}",
-            route.kind.as_str(),
-            path_for_script.unwrap_or("(none)")
-        );
+        if let Some(domain) = domain.as_deref() {
+            println!("domain: {domain}");
+            println!(
+                "route: {} path: {}",
+                route.kind.as_str(),
+                path_for_script.unwrap_or("(none)")
+            );
+        } else {
+            println!("domain: (keep existing, if any)");
+            println!("route: (keep existing, or none for a new app)");
+        }
         println!(
             "health: {} retries={} interval={}s timeout={}s",
             health.path, health.retries, health.interval_secs, health.timeout_secs

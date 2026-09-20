@@ -69,6 +69,8 @@ fn deploy_dry_run_uses_project_config() {
     assert!(output.status.success(), "{output:?}");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("deploy web to prod"));
+    assert!(stdout.contains("domain: (keep existing, if any)"));
+    assert!(stdout.contains("route: (keep existing, or none for a new app)"));
     assert!(stdout.contains("health: /health"));
     assert!(stdout.contains("verify_binary_deps: false"));
 }
