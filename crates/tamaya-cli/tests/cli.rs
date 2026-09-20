@@ -477,11 +477,18 @@ worker = "prod"
 #[test]
 fn env_commands_report_missing_worker_and_ssh_errors() {
     let home = initialized("env-errors");
+    // Exceed the pipe capacity so an exit before reading stdin reliably closes
+    // the pipe while the test is still writing, regardless of scheduling.
+    let input = "1".repeat(2 * 1024 * 1024);
     let output = output_with_stdin(
-        tamaya(&home).args(["env", "--app", "web", "set", "A", "--stdin"]),
-        "1\n",
+        tamaya(&home).args(["env", "web", "set", "A", "--stdin"]),
+        &input,
     );
     assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("worker is required"),
+        "{output:?}"
+    );
 
     add_worker(&home);
     let output = tamaya(&home)
@@ -737,13 +744,17 @@ fn output_with_stdin(command: &mut Command, input: &str) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(input.as_bytes())
-        .unwrap();
-    child.wait_with_output().unwrap()
+    let write_result = child.stdin.take().unwrap().write_all(input.as_bytes());
+    let output = child.wait_with_output().unwrap();
+    if let Err(error) = write_result {
+        // Validation may fail before the CLI reads stdin. Preserve its actual
+        // error, but never hide lost input on a successful command.
+        assert!(
+            error.kind() == std::io::ErrorKind::BrokenPipe && !output.status.success(),
+            "failed to write command input: {error}; {output:?}"
+        );
+    }
+    output
 }
 
 fn fake_ssh(home: &Path) -> PathBuf {
