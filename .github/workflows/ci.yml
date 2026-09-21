@@ -24,3 +24,11 @@ jobs:
         run: cargo test --test worker_permissions -- --ignored
       - name: Verify environment values with real systemd
         run: cargo test --test env_systemd -- --ignored
+      - name: Verify SPA routes with real Caddy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/tamaya-caddy"
+          gh release download v2.11.4 --repo caddyserver/caddy --pattern caddy_2.11.4_linux_amd64.tar.gz --dir "$RUNNER_TEMP/tamaya-caddy"
+          tar -xzf "$RUNNER_TEMP/tamaya-caddy/caddy_2.11.4_linux_amd64.tar.gz" -C "$RUNNER_TEMP/tamaya-caddy" caddy
+          TAMAYA_TEST_CADDY="$RUNNER_TEMP/tamaya-caddy/caddy" cargo test --test spa_routing -- --ignored

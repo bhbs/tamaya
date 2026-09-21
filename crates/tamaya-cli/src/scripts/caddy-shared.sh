@@ -178,7 +178,11 @@ caddy_write_published_route_snippet() {
   test -n "$write_path" || return 0
   sudo mkdir -p "$route_dir"
   if test "$write_publish_type" = "spa"; then
-    write_try_files='    try_files {path} /index.html'
+    if is_root_path "$write_path"; then
+      write_try_files='    try_files {path} /index.html'
+    else
+      write_try_files="    try_files {path} $write_path/index.html"
+    fi
   else
     write_try_files='    try_files {path} {path}.html {path}/ /404.html'
   fi

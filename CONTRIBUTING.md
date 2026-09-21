@@ -23,6 +23,15 @@ just ci           # Run fmt-check, clippy, and tests (CI pipeline)
 just coverage     # Run tests with coverage (requires cargo-llvm-cov)
 ```
 
+The HTTP routing regression test uses a real Caddy executable and runs explicitly
+in CI. To run it locally with Caddy 2.11.4:
+
+```bash
+TAMAYA_TEST_CADDY=/absolute/path/to/caddy cargo test --test spa_routing -- --ignored
+```
+
+It starts temporary servers bound to localhost and stops them after each check.
+
 ## Making Changes
 
 1. Fork the repository and create a feature branch.

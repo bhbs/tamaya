@@ -32,6 +32,11 @@ path = "/docs"
 
 For path-scoped publishes, the path prefix must exist inside `static_root`. For example, `path = "/docs"` with `static_root = "./dist"` serves files from `dist/docs/`. In SPA mode, Tamaya requires `index.html` at the served root, so that example must include `dist/docs/index.html`.
 
+Missing paths such as `/docs/guide/getting-started` fall back to
+`/docs/index.html`, while existing assets under `/docs/` are served directly.
+Root-scoped SPAs use `/index.html`. The same routing applies after rollback or
+returning from maintenance with `live`.
+
 ## Examples
 
 API apps are process apps, so deploy them with `tamaya deploy` and route them with `path`:
